@@ -536,7 +536,7 @@ if mode == "일반 챗봇":
             st.rerun()
 
 elif mode == "생기부 작성":
-    st.subheader("생기부 작성 전용 (Phase 6)")
+    st.subheader("생기부 작성 전용")
     
     with st.expander("[공통] 교육과정 / 성취기준 및 개별 문체 가이드 등록", expanded=True):
         st.caption("과목별 성취기준 문서와 선생님 고유의 작성 스타일 예시 문장을 등록해 주세요.")
