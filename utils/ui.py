@@ -2,37 +2,19 @@ def hide_streamlit_chrome():
     import streamlit as st
     st.markdown("""
     <style>
-    /* (1) 상단 툴바 계열만 제거 — Share/Star/Edit/GitHub/⋮/Deploy */
-    div[data-testid="stToolbar"]{display:none !important;}
-    [data-testid="stToolbarActions"]{display:none !important;}
-    [data-testid="stActionButtonIcon"]{display:none !important;}
-    [data-testid="stAppDeployButton"], .stAppDeployButton{display:none !important;}
-    #MainMenu{display:none !important;}
-    [data-testid="stDecoration"]{display:none !important;}
-
-    /* (2) header는 절대 display:none 하지 말고, 투명 처리만 한다 */
-    header[data-testid="stHeader"]{
-        background:transparent !important;
-        box-shadow:none !important;
-        border:none !important;
-        height:2.75rem !important;   /* 0으로 만들면 사이드바 토글이 잘림 */
+    /* (1) Deploy 버튼 및 Star/GitHub/Edit 등 액션 버튼들만 정밀 숨김 (진입 메뉴 버튼은 유지) */
+    [data-testid="stAppDeployButton"], .stAppDeployButton {
+        display: none !important;
+    }
+    [data-testid="stToolbarActions"] {
+        display: none !important;
+    }
+    [data-testid="stDecoration"] {
+        display: none !important;
     }
 
-    /* (3) 사이드바 토글/네비게이션은 강제로 보이게 — Streamlit 버전별 셀렉터 전부 커버 */
-    [data-testid="stSidebarCollapsedControl"],
-    [data-testid="collapsedControl"],
-    [data-testid="stSidebarCollapseButton"],
-    [data-testid="stExpandSidebarButton"]{
-        display:block !important;
-        visibility:visible !important;
-        opacity:1 !important;
-        pointer-events:auto !important;
-        z-index:9999 !important;
-    }
-
-    /* (4) 하단 푸터 / 상태 위젯 / 배지 */
+    /* (2) 하단 푸터 / 배지 */
     footer{display:none !important;}
-    [data-testid="stStatusWidget"]{display:none !important;}
     [class*="viewerBadge"]{display:none !important;}
 
     /* (5) 팝업, 다이얼로그, 툴팁, 드롭다운 등 오버레이 UI 정상 표시 및 최상단 보장 */
