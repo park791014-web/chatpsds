@@ -7,7 +7,7 @@ import pdfplumber
 from docx import Document
 from pptx import Presentation
 from openai import OpenAI
-from utils.ui import hide_streamlit_chrome
+from utils.ui import hide_streamlit_chrome, paste_listener
 
 # 1. 페이지 기본 설정 (사이드바 기본 열림 상태로 고정)
 st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝", initial_sidebar_state="expanded")
@@ -177,12 +177,33 @@ def get_openrouter_client():
         api_key=api_key,
     )
 
-# 모델 라인업
+import hashlib
+
+# 이미지 데이터의 MD5 해시값 계산을 통한 중복 방지 헬퍼 함수
+def calculate_image_hash(base64_data):
+    if not base64_data:
+        return ""
+    payload = base64_data.split(",")[-1]
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+# 모델 라인업 설정 (기능 지원 여부 일원화 관리)
 MODEL_MAP = {
-    "Claude Opus 5": "anthropic/claude-opus-5",
-    "GPT-5.6 Sol": "openai/gpt-5.6-sol",
-    "Gemini 3.5 Flash": "google/gemini-flash-1.5",
-    "Claude 3.5 Sonnet (검수 권장)": "anthropic/claude-3.5-sonnet:beta"
+    "Claude Opus 5": {
+        "id": "anthropic/claude-opus-5",
+        "supports_images": True
+    },
+    "GPT-5.6 Sol": {
+        "id": "openai/gpt-5.6-sol",
+        "supports_images": True
+    },
+    "Gemini 3.5 Flash": {
+        "id": "google/gemini-flash-1.5",
+        "supports_images": True
+    },
+    "Claude 3.5 Sonnet (검수 권장)": {
+        "id": "anthropic/claude-3.5-sonnet:beta",
+        "supports_images": True
+    }
 }
 
 # 2. 세션 상태 초기화
@@ -216,6 +237,9 @@ if "eval_result" not in st.session_state:
     st.session_state.eval_result = ""
 if "eval_target_text" not in st.session_state:
     st.session_state.eval_target_text = ""
+
+if "chat_images" not in st.session_state:
+    st.session_state.chat_images = []
 
 # ==========================================
 # 파일 통합 파싱 및 캐싱 최적화 (버퍼링 완벽 해결)
@@ -332,7 +356,7 @@ with col2:
         list(MODEL_MAP.keys()),
         label_visibility="collapsed"
     )
-    selected_model = MODEL_MAP[selected_model_name]
+    selected_model = MODEL_MAP[selected_model_name]["id"]
 
 # 모드 선택
 mode = st.segmented_control(
@@ -457,42 +481,147 @@ if mode == "일반 챗봇":
     curr_idx = st.session_state.current_chat_idx if st.session_state.current_chat_idx is not None else 0
     current_chat = st.session_state.chat_sessions[curr_idx]
     
+    # 붙여넣기 이벤트 콜백 함수 정의
+    def handle_pasted_image():
+        state = st.session_state.get("paste_listener_inst")
+        if state and hasattr(state, "pasted_image") and state.pasted_image:
+            img_data = state.pasted_image
+            img_hash = calculate_image_hash(img_data["data"])
+            # 중복 체크 (해시값 활용)
+            exists = any(img.get("hash") == img_hash for img in st.session_state.chat_images)
+            if not exists:
+                st.session_state.chat_images.append({
+                    "name": img_data["name"],
+                    "type": img_data["type"],
+                    "size": img_data["size"],
+                    "size_kb": img_data["size"] / 1024.0,
+                    "data": img_data["data"],
+                    "hash": img_hash
+                })
+
+    # 붙여넣기 컴포넌트 렌더링
+    paste_listener(key="paste_listener_inst", on_pasted_image=handle_pasted_image)
+    
+    # 좀 더 컴팩트한 레이블로 업로더 노출
     uploaded_files = st.file_uploader(
-        "자료 첨부 (PDF, HWP, XLSX, DOCX, PPTX, 이미지 등)",
+        "📎 파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
         accept_multiple_files=True,
-        label_visibility="collapsed",
         key=f"uploader_chat_{st.session_state.uploader_key_chat}"
     )
     
+    # 이미지 파일과 일반 텍스트 참조 문서를 분리하여 처리
+    non_image_files = []
     if uploaded_files:
+        for f in uploaded_files:
+            if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                import base64
+                file_bytes = f.getvalue()
+                b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
+                img_hash = calculate_image_hash(b64_data)
+                # 중복 체크 (해시값 활용)
+                exists = any(img.get("hash") == img_hash for img in st.session_state.chat_images)
+                if not exists:
+                    st.session_state.chat_images.append({
+                        "name": f.name,
+                        "type": f.type,
+                        "size": f.size,
+                        "size_kb": f.size / 1024.0,
+                        "data": b64_data,
+                        "hash": img_hash
+                    })
+            else:
+                non_image_files.append(f)
+                
+    if non_image_files:
         with st.container(horizontal=True):
-            for f in uploaded_files:
+            for f in non_image_files:
                 st.badge(f.name, icon=":material/description:", color="gray")
                 
     parsed_context = ""
-    if uploaded_files:
+    if non_image_files:
         with st.expander("업로드된 파일 텍스트 미리보기", icon=":material/description:"):
             parsed_texts = []
-            for file in uploaded_files:
+            for file in non_image_files:
                 file_text = parse_uploaded_file(file)
                 parsed_texts.append(f"\n\n[파일: {file.name}]\n" + file_text)
                 st.markdown(f"**{file.name}** ({len(file_text)}자 추출됨)")
                 st.text(file_text[:300] + ("..." if len(file_text) > 300 else ""))
             parsed_context = "".join(parsed_texts)
                 
+    # 대화 히스토리 화면 표시 (이미지 렌더링 지원)
     for msg in current_chat["messages"]:
         with st.chat_message(msg["role"]):
-            st.write(msg["content"])
+            if isinstance(msg["content"], list):
+                for part in msg["content"]:
+                    if part["type"] == "text":
+                        st.write(part["text"])
+                    elif part["type"] == "image_url":
+                        st.image(part["image_url"]["url"], width=250)
+            else:
+                st.write(msg["content"])
             if "tokens" in msg:
                 st.caption(f"소모 토큰: {msg['tokens']:,} Tokens")
-            
-    if prompt := st.chat_input("Chat PSDongSung에게 물어보기"):
-        current_chat["messages"].append({"role": "user", "content": prompt})
+
+    # 첨부된 이미지 미리보기 썸네일 노출
+    if st.session_state.chat_images:
+        st.write("첨부된 이미지:")
+        img_cols = st.columns(max(len(st.session_state.chat_images), 8))
+        for idx, img in enumerate(st.session_state.chat_images):
+            with img_cols[idx]:
+                st.image(img["data"], use_container_width=True)
+                st.caption(f"{img['name']} ({img['size_kb']:.1f} KB)")
+                if st.button("삭제", key=f"del_img_{idx}", use_container_width=True):
+                    st.session_state.chat_images.pop(idx)
+                    st.rerun()
+                    
+        # 텍스트 입력 없이 이미지만 전송하는 버튼 제공
+        if st.button("🖼️ 첨부된 이미지 분석 요청 전송", type="primary", use_container_width=True):
+            st.session_state["image_direct_submit"] = True
+            st.rerun()
+
+    # 입력 제출 플래그 및 텍스트 조합
+    prompt = st.chat_input("Chat PSDongSung에게 물어보기")
+    direct_submit = st.session_state.pop("image_direct_submit", False)
+    
+    if prompt or direct_submit:
+        final_prompt_text = prompt if prompt else "첨부된 이미지를 자세하게 분석해 주세요."
+        
+        # 모델별 이미지 입력 지원 여부 확인
+        model_supports_img = MODEL_MAP[selected_model_name].get("supports_images", False)
+        
+        user_content = []
+        # 비이미지 파일의 텍스트가 있을 경우 프롬프트 뒤에 결합
+        total_text = final_prompt_text + (parsed_context if parsed_context else "")
+        user_content.append({"type": "text", "text": total_text})
+        
+        has_images = len(st.session_state.chat_images) > 0
+        if has_images:
+            if model_supports_img:
+                for img in st.session_state.chat_images:
+                    clean_b64 = img["data"].split(",")[-1]
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{img['type']};base64,{clean_b64}"
+                        }
+                    })
+            else:
+                st.error("현재 선택한 모델은 이미지 분석을 지원하지 않습니다. 이미지를 전송할 수 없습니다.")
+                st.stop()
+                
+        # 대화 세션에 추가 및 화면 출력
+        current_chat["messages"].append({"role": "user", "content": user_content})
+        
         with st.chat_message("user"):
-            st.write(prompt)
-            
+            for part in user_content:
+                if part["type"] == "text":
+                    st.write(part["text"])
+                elif part["type"] == "image_url":
+                    st.image(part["image_url"]["url"], width=250)
+                    
         if current_chat["title"] == "새 대화":
-            current_chat["title"] = prompt[:12] + "..." if len(prompt) > 12 else prompt
+            title_text = final_prompt_text
+            current_chat["title"] = title_text[:12] + "..." if len(title_text) > 12 else title_text
             
         with st.chat_message("assistant"):
             client = get_openrouter_client()
@@ -503,16 +632,14 @@ if mode == "일반 챗봇":
             else:
                 with st.spinner(f"[{selected_model_name}] 답변 생성 중..."):
                     try:
-                        file_context = ""
-                        if uploaded_files:
-                            file_context = parsed_context
-                        
                         api_messages = [{"role": "system", "content": "당신은 교사를 보조하는 유능한 AI 에이전트 'Chat PSDongSung'입니다."}]
+                        
+                        # 이전 대화 목록 히스토리 메시지 팩킹
                         for m in current_chat["messages"][:-1]:
                             api_messages.append({"role": m["role"], "content": m["content"]})
-                        
-                        final_prompt = prompt + file_context if file_context else prompt
-                        api_messages.append({"role": "user", "content": final_prompt})
+                            
+                        # 현재 메시지 추가
+                        api_messages.append({"role": "user", "content": user_content})
                         
                         response = client.chat.completions.create(
                             model=selected_model,
@@ -527,6 +654,9 @@ if mode == "일반 챗봇":
                             st.caption(f"소모 토큰: {tokens_count:,} Tokens")
                         else:
                             tokens_count = 0
+                            
+                        # 이미지 전송 성공 시 이미지 큐 클리어
+                        st.session_state.chat_images = []
                     except Exception as e:
                         res = "AI 응답 생성 실패."
                         st.error(f"오류 상세 내용: {str(e)}")
