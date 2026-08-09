@@ -7,3 +7,7 @@ base = "dark"
 
 [client]
 toolbarMode = "minimal"
+showSidebarNavigation = true
+
+[browser]
+gatherUsageStats = false

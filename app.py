@@ -7,12 +7,16 @@ import pdfplumber
 from docx import Document
 from pptx import Presentation
 from openai import OpenAI
+from utils.ui import hide_streamlit_chrome
 
 # 1. 페이지 기본 설정 (사이드바 기본 열림 상태로 고정)
 st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝", initial_sidebar_state="expanded")
 
+# Streamlit UI 크롬 정밀 제거
+hide_streamlit_chrome()
+
 # ==========================================
-# 고급 타이포그래피 & Streamlit 기본 UI 숨김 CSS
+# 고급 타이포그래피 & 여백 조절 CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -21,15 +25,6 @@ st.markdown("""
     html, body, [class*="css"] {
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
-
-    /* 상단 헤더 배경은 투명화하고 메인메뉴만 숨겨서 좌측 사이드바 토글(열기) 버튼이 보장되도록 수정 */
-    [data-testid="stHeader"] {
-        background: transparent !important;
-    }
-    [data-testid="stMainMenu"] {
-        display: none !important;
-    }
-    footer { visibility: hidden !important; }
 
     /* 기본 메인 컨테이너 패딩 */
     .block-container {
