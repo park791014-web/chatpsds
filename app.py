@@ -8,11 +8,11 @@ from docx import Document
 from pptx import Presentation
 from openai import OpenAI
 
-# 1. 페이지 기본 설정
-st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝")
+# 1. 페이지 기본 설정 (사이드바 기본 열림 상태로 고정)
+st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝", initial_sidebar_state="expanded")
 
 # ==========================================
-# 가시성 및 테마 대응 타이포그래피 CSS
+# 고급 타이포그래피 & Streamlit 기본 UI 숨김 CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -22,9 +22,13 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* Streamlit 기본 상단 헤더 및 푸터 숨기기 */
-    [data-testid="stHeader"] { display: none !important; }
-    [data-testid="stStatusWidget"] { display: none !important; }
+    /* 상단 헤더 배경은 투명화하고 메인메뉴만 숨겨서 좌측 사이드바 토글(열기) 버튼이 보장되도록 수정 */
+    [data-testid="stHeader"] {
+        background: transparent !important;
+    }
+    [data-testid="stMainMenu"] {
+        display: none !important;
+    }
     footer { visibility: hidden !important; }
 
     /* 기본 메인 컨테이너 패딩 */
@@ -41,9 +45,9 @@ st.markdown("""
         border-bottom: 1px solid #334155;
     }
     
-    /* 기본적으로 라이트 모드에 대응하는 진한 글씨체 지정 */
+    /* 테마 고정에 따라 항상 밝고 선명한 텍스트 가시성 유지 */
     .brand-title {
-        color: #0f172a !important;
+        color: #f8fafc !important;
         font-size: 1.8rem;
         font-weight: 800;
         letter-spacing: -0.5px;
@@ -63,7 +67,7 @@ st.markdown("""
         letter-spacing: -0.2px;
     }
     .sidebar-brand-title {
-        color: #0f172a !important;
+        color: #f8fafc !important;
         font-size: 1.4rem;
         font-weight: 800;
         letter-spacing: -0.5px;
@@ -72,13 +76,6 @@ st.markdown("""
         margin-bottom: 0.8rem;
         padding-bottom: 0.6rem;
         border-bottom: 1px solid #334155;
-    }
-
-    /* 시스템 다크모드 환경 대응 */
-    @media (prefers-color-scheme: dark) {
-        .brand-title, .sidebar-brand-title {
-            color: #f8fafc !important;
-        }
     }
 
     /* 영화/드라마 보안 시스템 스타일 로그인 카드 (항상 다크 테마 고정) */
