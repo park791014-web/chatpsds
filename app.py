@@ -6,14 +6,13 @@ import pandas as pd
 import pdfplumber
 from docx import Document
 from pptx import Presentation
-from PIL import Image
 from openai import OpenAI
 
 # 1. 페이지 기본 설정
-st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon=None)
+st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝")
 
 # ==========================================
-# 고급 타이포그래피 & 여백 조절 CSS
+# 가시성 및 테마 대응 타이포그래피 CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -22,6 +21,11 @@ st.markdown("""
     html, body, [class*="css"] {
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
+
+    /* Streamlit 기본 상단 헤더 및 푸터 숨기기 */
+    [data-testid="stHeader"] { display: none !important; }
+    [data-testid="stStatusWidget"] { display: none !important; }
+    footer { visibility: hidden !important; }
 
     /* 기본 메인 컨테이너 패딩 */
     .block-container {
@@ -36,8 +40,10 @@ st.markdown("""
         padding-bottom: 0.6rem;
         border-bottom: 1px solid #334155;
     }
+    
+    /* 기본적으로 라이트 모드에 대응하는 진한 글씨체 지정 */
     .brand-title {
-        color: #f8fafc;
+        color: #0f172a !important;
         font-size: 1.8rem;
         font-weight: 800;
         letter-spacing: -0.5px;
@@ -46,20 +52,18 @@ st.markdown("""
         display: inline-block;
     }
     .brand-accent {
-        color: #38bdf8;
+        color: #38bdf8 !important;
         font-weight: 800;
     }
     .brand-sub {
-        color: #94a3b8;
+        color: #94a3b8 !important;
         font-size: 0.85rem;
         font-weight: 400;
         margin-top: 0.2rem;
         letter-spacing: -0.2px;
     }
-
-    /* 사이드바 타이틀 커스텀 디자인 (가운데 정렬 + 여백 축소) */
     .sidebar-brand-title {
-        color: #f8fafc;
+        color: #0f172a !important;
         font-size: 1.4rem;
         font-weight: 800;
         letter-spacing: -0.5px;
@@ -70,12 +74,19 @@ st.markdown("""
         border-bottom: 1px solid #334155;
     }
 
-    /* 영화/드라마 보안 시스템 스타일 로그인 카드 */
+    /* 시스템 다크모드 환경 대응 */
+    @media (prefers-color-scheme: dark) {
+        .brand-title, .sidebar-brand-title {
+            color: #f8fafc !important;
+        }
+    }
+
+    /* 영화/드라마 보안 시스템 스타일 로그인 카드 (항상 다크 테마 고정) */
     .login-card {
         text-align: center;
     }
     .login-title {
-        color: #f8fafc;
+        color: #f8fafc !important;
         font-size: 1.6rem;
         font-weight: 800;
         letter-spacing: -0.5px;
@@ -83,7 +94,7 @@ st.markdown("""
         line-height: 1.3;
     }
     .login-sub {
-        color: #64748b;
+        color: #64748b !important;
         font-size: 0.85rem;
         margin-bottom: 1.5rem;
     }
@@ -215,7 +226,7 @@ if "eval_target_text" not in st.session_state:
     st.session_state.eval_target_text = ""
 
 # ==========================================
-# Phase 2: 파일 통합 파싱 및 캐싱 최적화
+# 파일 통합 파싱 및 캐싱 최적화 (버퍼링 완벽 해결)
 # ==========================================
 @st.cache_data(ttl="1h", max_entries=50)
 def parse_file_content(file_name, file_bytes):
@@ -265,9 +276,14 @@ def parse_file_content(file_name, file_bytes):
 def parse_uploaded_file(uploaded_file):
     if uploaded_file is None:
         return ""
-    # 파일 바이트 추출 후 캐싱된 함수 호출
-    file_bytes = uploaded_file.getvalue()
-    return parse_file_content(uploaded_file.name, file_bytes)
+    
+    # 텍스트 입력창 타이핑 중 랙 걸리는 현상을 방지하는 st.session_state 2차 캐싱
+    file_key = f"parsed_{uploaded_file.name}_{uploaded_file.size}"
+    if file_key not in st.session_state:
+        file_bytes = uploaded_file.getvalue()
+        st.session_state[file_key] = parse_file_content(uploaded_file.name, file_bytes)
+        
+    return st.session_state[file_key]
 
 # 3. 영화/드라마 보안 시스템 스타일 콤팩트 중앙 로그인 화면
 if not st.session_state.authenticated:
@@ -315,7 +331,7 @@ with col1:
     st.markdown("""
         <div class="brand-header">
             <div class="brand-title">Chat <span class="brand-accent">PSDongSung</span></div>
-            <div class="brand-sub">2022 개정 교육과정 기반 교사 전용 스마트 AI 에이전트</div>
+            <div class="brand-sub">교사 전용 스마트 AI 에이전트</div>
         </div>
     """, unsafe_allow_html=True)
 with col2:
@@ -326,7 +342,7 @@ with col2:
     )
     selected_model = MODEL_MAP[selected_model_name]
 
-# 모드 선택 (Segmented Control로 더 깔끔하게 구성)
+# 모드 선택
 mode = st.segmented_control(
     "모드",
     ["일반 챗봇", "생기부 작성", "생기부 검수/진단"],
@@ -334,7 +350,7 @@ mode = st.segmented_control(
     label_visibility="collapsed"
 )
 
-# 5. Commissioning Sidebar rendering
+# 5. 사이드바 구성
 with st.sidebar:
     st.markdown("""
         <div class="sidebar-brand-title">
@@ -343,7 +359,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     if mode == "일반 챗봇":
-        if st.button("새 대화 시작", icon=":material/add:", use_container_width=True):
+        if st.button("➕ 새 대화 시작", use_container_width=True):
             chat_key = f"uploader_chat_{st.session_state.uploader_key_chat}"
             if chat_key in st.session_state:
                 del st.session_state[chat_key]
@@ -356,11 +372,10 @@ with st.sidebar:
             
         st.subheader("대화 목록")
         for idx, chat in enumerate(st.session_state.chat_sessions):
-            btn_label = chat['title']
+            btn_label = f"💬 {chat['title']}"
             is_active = (idx == st.session_state.current_chat_idx)
             if st.button(
                 btn_label, 
-                icon=":material/chat:", 
                 key=f"chat_btn_{idx}", 
                 use_container_width=True, 
                 type="primary" if is_active else "secondary"
@@ -374,7 +389,7 @@ with st.sidebar:
                 st.rerun()
                 
     elif mode == "생기부 작성":
-        if st.button("새 학생 작성", icon=":material/add:", use_container_width=True):
+        if st.button("➕ 새 학생 작성", use_container_width=True):
             std_key = f"uploader_std_{st.session_state.uploader_key_std}"
             if std_key in st.session_state:
                 del st.session_state[std_key]
@@ -383,13 +398,12 @@ with st.sidebar:
             st.session_state.current_student_idx = None
             st.rerun()
             
-        st.subheader("학생 목록")
+        st.subheader("👥 학생 목록")
         for idx, student in enumerate(st.session_state.student_records):
-            btn_label = f"학번: {student['id_val']}"
+            btn_label = f"📄 학번: {student['id_val']}"
             is_active = (idx == st.session_state.current_student_idx)
             if st.button(
                 btn_label, 
-                icon=":material/description:", 
                 key=f"std_btn_{idx}_{student['id_val']}", 
                 use_container_width=True, 
                 type="primary" if is_active else "secondary"
@@ -407,7 +421,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # 작업한 학생 일괄 엑셀 다운로드 버튼 배치 (생기부 작성 모드에서만 노출)
+    # 일괄 엑셀 다운로드 (생기부 작성 모드에서만 노출)
     if mode == "생기부 작성":
         if st.session_state.student_records:
             data_list = []
@@ -428,9 +442,9 @@ with st.sidebar:
             excel_data = excel_buffer.getvalue()
             
             st.download_button(
-                label="일괄 엑셀 다운로드",
+                label="📂 전체 학생 기록 다운로드 (Excel)",
                 data=excel_data,
-                file_name="생기부_일괄초안.xlsx",
+                file_name="전체생기부기록.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
@@ -438,15 +452,15 @@ with st.sidebar:
             st.button("일괄 엑셀 다운로드 (작성 데이터 없음)", disabled=True, use_container_width=True)
         st.markdown("---")
 
-    st.caption(f"누적 사용 토큰: **{st.session_state.total_tokens_used:,} Tokens**")
+    st.caption(f"⚡ 누적 사용 토큰: **{st.session_state.total_tokens_used:,} Tokens**")
     
-    if st.button("로그아웃", icon=":material/logout:", use_container_width=True):
+    if st.button("로그아웃", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
 
 st.divider()
 
-# 6. Main runner
+# 6. 메인 동작 영역
 if mode == "일반 챗봇":
     curr_idx = st.session_state.current_chat_idx if st.session_state.current_chat_idx is not None else 0
     current_chat = st.session_state.chat_sessions[curr_idx]
@@ -468,10 +482,7 @@ if mode == "일반 챗봇":
         with st.expander("업로드된 파일 텍스트 미리보기", icon=":material/description:"):
             parsed_texts = []
             for file in uploaded_files:
-                file_key = f"parsed_chat_{file.name}_{file.size}"
-                if file_key not in st.session_state:
-                    st.session_state[file_key] = parse_uploaded_file(file)
-                file_text = st.session_state[file_key]
+                file_text = parse_uploaded_file(file)
                 parsed_texts.append(f"\n\n[파일: {file.name}]\n" + file_text)
                 st.markdown(f"**{file.name}** ({len(file_text)}자 추출됨)")
                 st.text(file_text[:300] + ("..." if len(file_text) > 300 else ""))
@@ -536,8 +547,6 @@ if mode == "일반 챗봇":
             st.rerun()
 
 elif mode == "생기부 작성":
-    st.subheader("생기부 작성 전용")
-    
     with st.expander("[공통] 교육과정 / 성취기준 및 개별 문체 가이드 등록", expanded=True):
         st.caption("과목별 성취기준 문서와 선생님 고유의 작성 스타일 예시 문장을 등록해 주세요.")
         global_ref_files = st.file_uploader(
@@ -550,10 +559,7 @@ elif mode == "생기부 작성":
         if global_ref_files:
             ref_texts = []
             for g_file in global_ref_files:
-                file_key = f"parsed_gref_{g_file.name}_{g_file.size}"
-                if file_key not in st.session_state:
-                    st.session_state[file_key] = parse_uploaded_file(g_file)
-                ref_texts.append(f"\n\n[공통참조문서: {g_file.name}]\n" + st.session_state[file_key])
+                ref_texts.append(f"\n\n[공통참조문서: {g_file.name}]\n" + parse_uploaded_file(g_file))
             global_ref_text = "".join(ref_texts)
             st.success(f"총 {len(global_ref_files)}개의 공통 참조 문서가 반영되었습니다. (프롬프트 캐싱 적용됨)")
                 
@@ -598,10 +604,7 @@ elif mode == "생기부 작성":
         with st.expander("업로드된 파일 텍스트 미리보기", icon=":material/description:"):
             student_file_texts = []
             for file in student_files:
-                file_key = f"parsed_std_{file.name}_{file.size}"
-                if file_key not in st.session_state:
-                    st.session_state[file_key] = parse_uploaded_file(file)
-                file_text = st.session_state[file_key]
+                file_text = parse_uploaded_file(file)
                 student_file_texts.append(f"\n[파일: {file.name}]\n" + file_text)
                 st.markdown(f"**{file.name}** ({len(file_text)}자 추출됨)")
                 st.text(file_text[:300] + ("..." if len(file_text) > 300 else ""))
@@ -743,11 +746,7 @@ elif mode == "생기부 검수/진단":
     
     target_eval_text = ""
     if eval_file:
-        file_key = f"parsed_eval_{eval_file.name}_{eval_file.size}"
-        if file_key not in st.session_state:
-            with st.spinner("파일을 읽는 중입니다..."):
-                st.session_state[file_key] = parse_uploaded_file(eval_file)
-        target_eval_text = st.session_state[file_key]
+        target_eval_text = parse_uploaded_file(eval_file)
     elif eval_input_text:
         target_eval_text = eval_input_text
     elif st.session_state.eval_target_text:
