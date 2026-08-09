@@ -215,6 +215,8 @@ if "uploader_key_chat" not in st.session_state:
     st.session_state.uploader_key_chat = 0
 if "uploader_key_std" not in st.session_state:
     st.session_state.uploader_key_std = 0
+if "uploader_key_eval" not in st.session_state:
+    st.session_state.uploader_key_eval = 0
 
 # 세션 관리 (일반 챗봇)
 if "chat_sessions" not in st.session_state:
@@ -238,8 +240,155 @@ if "eval_result" not in st.session_state:
 if "eval_target_text" not in st.session_state:
     st.session_state.eval_target_text = ""
 
-if "chat_images" not in st.session_state:
-    st.session_state.chat_images = []
+# 모드별 독립된 첨부파일 큐 초기화 (기존 list 세션 방어 및 마이그레이션 적용)
+if "attachments" not in st.session_state or not isinstance(st.session_state.attachments, dict):
+    st.session_state.attachments = {"chat": [], "student": [], "eval": []}
+else:
+    # 각 scope key가 누락된 경우 자동 보완
+    st.session_state.attachments.setdefault("chat", [])
+    st.session_state.attachments.setdefault("student", [])
+    st.session_state.attachments.setdefault("eval", [])
+
+def calculate_bytes_hash(file_bytes):
+    return hashlib.md5(file_bytes).hexdigest()
+
+def add_attachment(name, mime_type, data_base64, size_bytes, source="upload", file_type="image", scope="chat"):
+    img_hash = calculate_image_hash(data_base64)
+    exists = any(item.get("hash") == img_hash for item in st.session_state.attachments[scope])
+    if not exists:
+        st.session_state.attachments[scope].append({
+            "name": name,
+            "mime_type": mime_type,
+            "data": data_base64,
+            "size": size_bytes,
+            "size_kb": size_bytes / 1024.0,
+            "source": source,
+            "type": file_type,
+            "hash": img_hash
+        })
+
+def add_document_attachment(name, mime_type, text_content, size_bytes, file_hash, scope="chat"):
+    exists = any(item.get("hash") == file_hash for item in st.session_state.attachments[scope])
+    if not exists:
+        st.session_state.attachments[scope].append({
+            "name": name,
+            "mime_type": mime_type,
+            "data": text_content,
+            "size": size_bytes,
+            "size_kb": size_bytes / 1024.0,
+            "source": "upload",
+            "type": "document",
+            "hash": file_hash
+        })
+
+def render_attachments_panel(uploader_key, scope="chat"):
+    paste_key = f"paste_listener_{scope}"
+    
+    # 1. paste listener callback (scope 인식)
+    def handle_pasted_image():
+        state = st.session_state.get(paste_key)
+        if state and hasattr(state, "pasted_image") and state.pasted_image:
+            img_data = state.pasted_image
+            add_attachment(
+                name=img_data["name"],
+                mime_type=img_data["type"],
+                data_base64=img_data["data"],
+                size_bytes=img_data["size"],
+                source="paste",
+                file_type="image",
+                scope=scope
+            )
+            
+    paste_listener(key=paste_key, on_pasted_image=handle_pasted_image)
+    
+    # 2. file uploader
+    uploaded_files = st.file_uploader(
+        "📎 파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
+        accept_multiple_files=True,
+        key=uploader_key,
+        label_visibility="collapsed"
+    )
+    
+    if uploaded_files:
+        for f in uploaded_files:
+            file_bytes = f.getvalue()
+            file_hash = calculate_bytes_hash(file_bytes)
+            
+            if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                import base64
+                b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
+                add_attachment(
+                    name=f.name,
+                    mime_type=f.type,
+                    data_base64=b64_data,
+                    size_bytes=f.size,
+                    source="upload",
+                    file_type="image",
+                    scope=scope
+                )
+            else:
+                text_content = parse_uploaded_file(f)
+                add_document_attachment(
+                    name=f.name,
+                    mime_type=f.type,
+                    text_content=text_content,
+                    size_bytes=f.size,
+                    file_hash=file_hash,
+                    scope=scope
+                )
+                
+    # 3. Preview grid for current attachments (FHD 기준 한 행 최대 4개 썸네일 그리드로 표시)
+    current_list = st.session_state.attachments[scope]
+    if current_list:
+        st.write("첨부자료 대기열:")
+        chunk_size = 4
+        for i in range(0, len(current_list), chunk_size):
+            row_items = current_list[i : i + chunk_size]
+            cols = st.columns(4)  # 항상 4개 열을 구성하여 썸네일 크기를 일관성 있게 유지
+            for idx, item in enumerate(row_items):
+                global_idx = i + idx
+                with cols[idx]:
+                    if item["type"] == "image":
+                        st.image(item["data"], use_container_width=True)
+                        st.caption(f"🖼️ {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
+                    else:
+                        st.caption(f"📄 {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
+                    if st.button("삭제", key=f"del_att_{uploader_key}_{global_idx}", use_container_width=True):
+                        current_list.pop(global_idx)
+                        st.rerun()
+
+def compile_api_payload(prompt, selected_model_name, scope="chat"):
+    images = []
+    text_contexts = []
+    
+    for item in st.session_state.attachments[scope]:
+        if item["type"] == "image":
+            images.append(item)
+        elif item["type"] == "document":
+            text_contexts.append(f"\n\n[첨부문서: {item['name']}]\n" + item["data"])
+            
+    model_supports_img = MODEL_MAP[selected_model_name].get("supports_images", False)
+    
+    if images and not model_supports_img:
+        st.error(f"현재 선택한 모델 ({selected_model_name})은 이미지 분석을 지원하지 않습니다. 이미지를 제외하거나 다른 모델을 선택해 주세요.")
+        st.stop()
+        
+    doc_text_combined = "".join(text_contexts)
+    final_text = prompt + doc_text_combined if doc_text_combined else prompt
+    
+    content_payload = []
+    content_payload.append({"type": "text", "text": final_text})
+    
+    for img in images:
+        clean_b64 = img["data"].split(",")[-1]
+        content_payload.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{img['mime_type']};base64,{clean_b64}"
+            }
+        })
+        
+    return content_payload
 
 # ==========================================
 # 파일 통합 파싱 및 캐싱 최적화 (버퍼링 완벽 해결)
@@ -380,6 +529,7 @@ with st.sidebar:
             if chat_key in st.session_state:
                 del st.session_state[chat_key]
             st.session_state.uploader_key_chat += 1
+            st.session_state.attachments["chat"] = []
             
             new_idx = len(st.session_state.chat_sessions)
             st.session_state.chat_sessions.append({"title": "새 대화", "messages": []})
@@ -400,6 +550,7 @@ with st.sidebar:
                 if chat_key in st.session_state:
                     del st.session_state[chat_key]
                 st.session_state.uploader_key_chat += 1
+                st.session_state.attachments["chat"] = []
                 
                 st.session_state.current_chat_idx = idx
                 st.rerun()
@@ -410,6 +561,7 @@ with st.sidebar:
             if std_key in st.session_state:
                 del st.session_state[std_key]
             st.session_state.uploader_key_std += 1
+            st.session_state.attachments["student"] = []
             
             st.session_state.current_student_idx = None
             st.rerun()
@@ -428,6 +580,7 @@ with st.sidebar:
                 if std_key in st.session_state:
                     del st.session_state[std_key]
                 st.session_state.uploader_key_std += 1
+                st.session_state.attachments["student"] = []
                 
                 st.session_state.current_student_idx = idx
                 st.rerun()
@@ -481,73 +634,9 @@ if mode == "일반 챗봇":
     curr_idx = st.session_state.current_chat_idx if st.session_state.current_chat_idx is not None else 0
     current_chat = st.session_state.chat_sessions[curr_idx]
     
-    # 붙여넣기 이벤트 콜백 함수 정의
-    def handle_pasted_image():
-        state = st.session_state.get("paste_listener_inst")
-        if state and hasattr(state, "pasted_image") and state.pasted_image:
-            img_data = state.pasted_image
-            img_hash = calculate_image_hash(img_data["data"])
-            # 중복 체크 (해시값 활용)
-            exists = any(img.get("hash") == img_hash for img in st.session_state.chat_images)
-            if not exists:
-                st.session_state.chat_images.append({
-                    "name": img_data["name"],
-                    "type": img_data["type"],
-                    "size": img_data["size"],
-                    "size_kb": img_data["size"] / 1024.0,
-                    "data": img_data["data"],
-                    "hash": img_hash
-                })
-
-    # 붙여넣기 컴포넌트 렌더링
-    paste_listener(key="paste_listener_inst", on_pasted_image=handle_pasted_image)
+    # 공통 첨부파일 패널 렌더링 (chat 스코프 지정)
+    render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
     
-    # 좀 더 컴팩트한 레이블로 업로더 노출
-    uploaded_files = st.file_uploader(
-        "📎 파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
-        accept_multiple_files=True,
-        key=f"uploader_chat_{st.session_state.uploader_key_chat}"
-    )
-    
-    # 이미지 파일과 일반 텍스트 참조 문서를 분리하여 처리
-    non_image_files = []
-    if uploaded_files:
-        for f in uploaded_files:
-            if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                import base64
-                file_bytes = f.getvalue()
-                b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
-                img_hash = calculate_image_hash(b64_data)
-                # 중복 체크 (해시값 활용)
-                exists = any(img.get("hash") == img_hash for img in st.session_state.chat_images)
-                if not exists:
-                    st.session_state.chat_images.append({
-                        "name": f.name,
-                        "type": f.type,
-                        "size": f.size,
-                        "size_kb": f.size / 1024.0,
-                        "data": b64_data,
-                        "hash": img_hash
-                    })
-            else:
-                non_image_files.append(f)
-                
-    if non_image_files:
-        with st.container(horizontal=True):
-            for f in non_image_files:
-                st.badge(f.name, icon=":material/description:", color="gray")
-                
-    parsed_context = ""
-    if non_image_files:
-        with st.expander("업로드된 파일 텍스트 미리보기", icon=":material/description:"):
-            parsed_texts = []
-            for file in non_image_files:
-                file_text = parse_uploaded_file(file)
-                parsed_texts.append(f"\n\n[파일: {file.name}]\n" + file_text)
-                st.markdown(f"**{file.name}** ({len(file_text)}자 추출됨)")
-                st.text(file_text[:300] + ("..." if len(file_text) > 300 else ""))
-            parsed_context = "".join(parsed_texts)
-                
     # 대화 히스토리 화면 표시 (이미지 렌더링 지원)
     for msg in current_chat["messages"]:
         with st.chat_message(msg["role"]):
@@ -562,53 +651,11 @@ if mode == "일반 챗봇":
             if "tokens" in msg:
                 st.caption(f"소모 토큰: {msg['tokens']:,} Tokens")
 
-    # 첨부된 이미지 미리보기 썸네일 노출
-    if st.session_state.chat_images:
-        st.write("첨부된 이미지:")
-        img_cols = st.columns(max(len(st.session_state.chat_images), 8))
-        for idx, img in enumerate(st.session_state.chat_images):
-            with img_cols[idx]:
-                st.image(img["data"], use_container_width=True)
-                st.caption(f"{img['name']} ({img['size_kb']:.1f} KB)")
-                if st.button("삭제", key=f"del_img_{idx}", use_container_width=True):
-                    st.session_state.chat_images.pop(idx)
-                    st.rerun()
-                    
-        # 텍스트 입력 없이 이미지만 전송하는 버튼 제공
-        if st.button("🖼️ 첨부된 이미지 분석 요청 전송", type="primary", use_container_width=True):
-            st.session_state["image_direct_submit"] = True
-            st.rerun()
-
-    # 입력 제출 플래그 및 텍스트 조합
-    prompt = st.chat_input("Chat PSDongSung에게 물어보기")
-    direct_submit = st.session_state.pop("image_direct_submit", False)
-    
-    if prompt or direct_submit:
-        final_prompt_text = prompt if prompt else "첨부된 이미지를 자세하게 분석해 주세요."
+    # 입력창 제출 대기
+    if prompt := st.chat_input("Chat PSDongSung에게 물어보기"):
+        # 공통 API 페이로드 컴파일 (chat 스코프 지정)
+        user_content = compile_api_payload(prompt, selected_model_name, scope="chat")
         
-        # 모델별 이미지 입력 지원 여부 확인
-        model_supports_img = MODEL_MAP[selected_model_name].get("supports_images", False)
-        
-        user_content = []
-        # 비이미지 파일의 텍스트가 있을 경우 프롬프트 뒤에 결합
-        total_text = final_prompt_text + (parsed_context if parsed_context else "")
-        user_content.append({"type": "text", "text": total_text})
-        
-        has_images = len(st.session_state.chat_images) > 0
-        if has_images:
-            if model_supports_img:
-                for img in st.session_state.chat_images:
-                    clean_b64 = img["data"].split(",")[-1]
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{img['type']};base64,{clean_b64}"
-                        }
-                    })
-            else:
-                st.error("현재 선택한 모델은 이미지 분석을 지원하지 않습니다. 이미지를 전송할 수 없습니다.")
-                st.stop()
-                
         # 대화 세션에 추가 및 화면 출력
         current_chat["messages"].append({"role": "user", "content": user_content})
         
@@ -620,8 +667,7 @@ if mode == "일반 챗봇":
                     st.image(part["image_url"]["url"], width=250)
                     
         if current_chat["title"] == "새 대화":
-            title_text = final_prompt_text
-            current_chat["title"] = title_text[:12] + "..." if len(title_text) > 12 else title_text
+            current_chat["title"] = prompt[:12] + "..." if len(prompt) > 12 else prompt
             
         with st.chat_message("assistant"):
             client = get_openrouter_client()
@@ -655,8 +701,12 @@ if mode == "일반 챗봇":
                         else:
                             tokens_count = 0
                             
-                        # 이미지 전송 성공 시 이미지 큐 클리어
-                        st.session_state.chat_images = []
+                        # 성공 시 첨부자료 큐 클리어 및 uploader key 갱신으로 상태 완전 초기화
+                        st.session_state.attachments["chat"] = []
+                        chat_key = f"uploader_chat_{st.session_state.uploader_key_chat}"
+                        if chat_key in st.session_state:
+                            del st.session_state[chat_key]
+                        st.session_state.uploader_key_chat += 1
                     except Exception as e:
                         res = "AI 응답 생성 실패."
                         st.error(f"오류 상세 내용: {str(e)}")
@@ -710,28 +760,8 @@ elif mode == "생기부 작성":
             index=["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"].index(default_type) if default_type in ["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"] else 0
         )
         
-    student_files = st.file_uploader(
-        "개별 학생 관찰 기록 파일 업로드 (다중 선택 가능)",
-        accept_multiple_files=True,
-        key=f"uploader_std_{st.session_state.uploader_key_std}"
-    )
+    render_attachments_panel(uploader_key=f"uploader_std_{st.session_state.uploader_key_std}", scope="student")
     
-    if student_files:
-        with st.container(horizontal=True):
-            for f in student_files:
-                st.badge(f.name, icon=":material/description:", color="gray")
-        
-    file_text_combined = ""
-    if student_files:
-        with st.expander("업로드된 파일 텍스트 미리보기", icon=":material/description:"):
-            student_file_texts = []
-            for file in student_files:
-                file_text = parse_uploaded_file(file)
-                student_file_texts.append(f"\n[파일: {file.name}]\n" + file_text)
-                st.markdown(f"**{file.name}** ({len(file_text)}자 추출됨)")
-                st.text(file_text[:300] + ("..." if len(file_text) > 300 else ""))
-            file_text_combined = "".join(student_file_texts)
-            
     student_memo = st.text_area("학생 관찰 내용 및 키워드", value=default_memo, height=120, placeholder="수업 참여도, 수행평가 과정, 특기사항 등 입력")
     
     if st.button("초안 생성", type="primary"):
@@ -761,19 +791,12 @@ elif mode == "생기부 작성":
                             "7. [기재 금지어]: 대회, 수상, 외부 기관명, 공인어학성적, 사교육 관련 내용 절대 언급 금지."
                         )
                         
-                        # 프롬프트 캐싱을 위한 메시지 구성
-                        user_payload = []
+                        # 프롬프트 구성 및 공통 첨부자료 빌더 통합
+                        prompt_base = f"[작성 정보]: {info_str} ({record_type})\n[선생님 문체 가이드]: {teacher_style_guide}\n[학생 관찰 메모]: {student_memo}"
                         if global_ref_text:
-                            user_payload.append({
-                                "type": "text",
-                                "text": f"[공통 교육과정/성취기준 참조 자료]:\n{global_ref_text}",
-                                "cache_control": {"type": "ephemeral"}
-                            })
+                            prompt_base += f"\n[공통 교육과정/성취기준 참조 자료]:\n{global_ref_text}"
                             
-                        user_payload.append({
-                            "type": "text",
-                            "text": f"[작성 정보]: {info_str} ({record_type})\n[선생님 문체 가이드]: {teacher_style_guide}\n[학생 관찰 메모]: {student_memo}\n[학생 첨부 자료]: {file_text_combined}"
-                        })
+                        user_payload = compile_api_payload(prompt_base, selected_model_name, scope="student")
                         
                         response = client.chat.completions.create(
                             model=selected_model,
@@ -803,6 +826,11 @@ elif mode == "생기부 작성":
                             st.session_state.current_student_idx = len(st.session_state.student_records) - 1
                             
                         st.success(f"{student_id} 학생 초안 생성이 완료되었습니다!")
+                        st.session_state.attachments["student"] = []
+                        std_key = f"uploader_std_{st.session_state.uploader_key_std}"
+                        if std_key in st.session_state:
+                            del st.session_state[std_key]
+                        st.session_state.uploader_key_std += 1
                         st.rerun()
                     except Exception as e:
                         st.error(f"초안 생성 중 오류 발생: {str(e)}")
@@ -862,16 +890,14 @@ elif mode == "생기부 검수/진단":
                 st.session_state.eval_target_text = ""
                 st.rerun()
 
-    # type 제한 해제로 빨간색 에러 완전 방지
-    eval_file = st.file_uploader("검수할 생기부 파일 첨부 (PDF, HWP, DOCX, TXT 등)", key="eval_file_uploader")
+    # 공통 첨부파일 패널 렌더링 (eval 스코프 지정)
+    render_attachments_panel(uploader_key=f"uploader_eval_{st.session_state.uploader_key_eval}", scope="eval")
     eval_input_text = st.text_area("검수할 생기부 문장 직접 입력", height=180, placeholder="검수하고자 하는 생기부 특기사항 문단을 복사해서 붙여넣으세요.")
     
-    target_eval_text = ""
-    if eval_file:
-        target_eval_text = parse_uploaded_file(eval_file)
-    elif eval_input_text:
-        target_eval_text = eval_input_text
-    elif st.session_state.eval_target_text:
+    # 텍스트 검수 대상 설정 (중복 전달 제거를 위해 첨부파일 텍스트는 compile_api_payload가 처리하도록 격리)
+    target_eval_text = eval_input_text
+    
+    if not target_eval_text and st.session_state.eval_target_text:
         target_eval_text = st.session_state.eval_target_text
         
     if target_eval_text:
@@ -879,7 +905,7 @@ elif mode == "생기부 검수/진단":
         st.write(f"검수 대상 분량: {c_cnt}자 / **{b_cnt} Byte** (NEIS 기준)")
         
     if st.button("생기부 정밀 진단 시작", type="primary"):
-        if target_eval_text:
+        if target_eval_text or any(item["type"] == "image" for item in st.session_state.attachments["eval"]) or any(item["type"] == "document" for item in st.session_state.attachments["eval"]):
             client = get_openrouter_client()
             if not client:
                 st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
@@ -888,7 +914,7 @@ elif mode == "생기부 검수/진단":
                     try:
                         eval_system_prompt = (
                             "당신은 대한민국 학교생활기록부 정밀 검수 평가관입니다.\n"
-                            "제출된 생기부 텍스트를 분석하여 아래 구조에 맞춰 상세히 평가 리포트를 작성하세요:\n\n"
+                            "제출된 생기부 텍스트 및 첨부자료를 분석하여 아래 구조에 맞춰 상세히 평가 리포트를 작성하세요:\n\n"
                             "1. 지침 위반 및 기재 금지어 적발: (대회, 수상, 외부기관, 어학성적, 사교육 유발 요소 여부 적발)\n"
                             "2. 문체 및 오탈자/비문 진단: (학생 이름/주어 시작 문장 오남용 여부, '~함/임' 어조 미준수 여부, 맞춤법 적발)\n"
                             "3. 작성의 장점 (강점): (구체적 수행과정, 도구 활용, 성취수준 표현 우수성 진술)\n"
@@ -896,11 +922,14 @@ elif mode == "생기부 검수/진단":
                             "5. 최종 개선/수정 제안 문장: (지침을 완벽히 준수한 최종 완성 문단 제시)\n"
                         )
                         
+                        prompt_base = f"[검수 대상 생기부 텍스트]:\n{target_eval_text}"
+                        user_payload = compile_api_payload(prompt_base, selected_model_name, scope="eval")
+                        
                         response = client.chat.completions.create(
                             model=selected_model,
                             messages=[
                                 {"role": "system", "content": eval_system_prompt},
-                                {"role": "user", "content": f"[검수 대상 생기부 텍스트]:\n{target_eval_text}"}
+                                {"role": "user", "content": user_payload}
                             ]
                         )
                         eval_result = response.choices[0].message.content
@@ -908,6 +937,13 @@ elif mode == "생기부 검수/진단":
                         if hasattr(response, 'usage') and response.usage:
                             tokens = response.usage.total_tokens
                             st.session_state.total_tokens_used += tokens
+                        
+                        # 검수 성공 시 첨부 파일 리셋 및 uploader key 갱신으로 상태 초기화
+                        st.session_state.attachments["eval"] = []
+                        eval_key = f"uploader_eval_{st.session_state.uploader_key_eval}"
+                        if eval_key in st.session_state:
+                            del st.session_state[eval_key]
+                        st.session_state.uploader_key_eval += 1
                         
                         st.session_state.eval_result = eval_result
                         st.session_state.eval_target_text = target_eval_text
