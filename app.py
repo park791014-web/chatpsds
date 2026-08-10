@@ -26,10 +26,10 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* 메인 컨테이너 세로 패딩 40% 축소 */
+    /* 메인 컨테이너 세로 패딩 조절 (하단 8.5rem 여백 확보) */
     .block-container {
         padding-top: 2.2rem !important;
-        padding-bottom: 1.2rem !important;
+        padding-bottom: 8.5rem !important;
     }
     
     /* Streamlit 수직 요소 간격 고밀도화 */
@@ -41,18 +41,43 @@ st.markdown("""
         margin-bottom: 0.4rem !important;
     }
     
-    /* 상단 Sticky 고정 헤더 컨테이너 컴팩트화 */
+    /* 상단 Sticky 고정 헤더 컨테이너 컴팩트화 & 잘림 방지 (overflow: visible) */
     div[data-testid="stVerticalBlock"] > div:has(div[key="sticky_header"]),
     div[key="sticky_header"],
-    [data-testid="stElementContainer"]:has(div[key="sticky_header"]) {
+    [data-testid="stElementContainer"]:has(div[key="sticky_header"]),
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(div[key="sticky_header"]) {
         position: sticky !important;
         top: 2.8rem !important;
         z-index: 9999 !important;
         background-color: #0f172a !important;
-        padding-top: 0.2rem !important;
-        padding-bottom: 0.3rem !important;
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.4rem !important;
         margin-bottom: 0.4rem !important;
         border-bottom: 1px solid #334155 !important;
+        overflow: visible !important;
+    }
+    
+    /* 모델 selectbox 사방 둥근 테두리 잘림 방지 및 여백 확보 */
+    div[key="sticky_header"] div[data-testid="stSelectbox"],
+    div[key="sticky_header"] div[data-baseweb="select"],
+    div[key="sticky_header"] div[data-baseweb="select"] > div {
+        overflow: visible !important;
+        border-radius: 8px !important;
+    }
+    
+    /* 일반 챗봇 전용 하단 고정 첨부자료 패널 (st.chat_input 바로 위) */
+    div[data-testid="stVerticalBlock"] > div:has(div[key="chat_bottom_attachment_strip"]),
+    div[key="chat_bottom_attachment_strip"],
+    [data-testid="stElementContainer"]:has(div[key="chat_bottom_attachment_strip"]) {
+        position: sticky !important;
+        bottom: 3.5rem !important;
+        z-index: 998 !important;
+        background-color: #0f172a !important;
+        padding: 0.3rem 0.6rem !important;
+        margin-bottom: 0.2rem !important;
+        border-radius: 8px 8px 0 0 !important;
+        border-top: 1px solid #334155 !important;
+        overflow: visible !important;
     }
     
     /* 메인 화면 브랜드 헤더 여백 축소 */
@@ -785,8 +810,9 @@ if mode == "일반 챗봇":
             if "tokens" in msg:
                 st.caption(f"소모 토큰: {msg['tokens']:,} Tokens")
 
-    # 2. 대화 기록 바로 아래 (채팅 입력창 직전)에 첨부자료 패널 배치
-    render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
+    # 2. 채팅 입력창 바로 위에 일반 챗봇 전용 하단 고정 첨부자료 패널 배치
+    with st.container(key="chat_bottom_attachment_strip"):
+        render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
 
     # 3. 입력창 제출 대기
     if prompt := st.chat_input("Chat PSDongSung에게 물어보기"):
