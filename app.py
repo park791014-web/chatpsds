@@ -10,7 +10,7 @@ from openai import OpenAI
 from utils.ui import hide_streamlit_chrome, paste_listener
 
 # 1. 페이지 기본 설정 (사이드바 기본 열림 상태로 고정)
-st.set_page_config(page_title="Chat PSDongSung", layout="wide", page_icon="📝", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Chat PSDongSung", layout="wide", initial_sidebar_state="expanded")
 
 # Streamlit UI 크롬 정밀 제거
 hide_streamlit_chrome()
@@ -188,27 +188,71 @@ def calculate_image_hash(base64_data):
 
 # 모델 라인업 설정 (기능 지원 여부 및 역할 일원화 관리)
 MODEL_MAP = {
-    "Gemini 3.5 Flash": {
-        "id": "google/gemini-3.5-flash",
+    "GPT-5.6 Luna": {
+        "id": "openai/gpt-5.6-luna",
         "supports_images": True,
-        "role": "일반 사용"
+        "role": "빠른 검토 · 가성비"
     },
-    "GPT-5.6 Sol": {
-        "id": "openai/gpt-5.6-sol",
+    "Gemini 3.6 Flash": {
+        "id": "google/gemini-3.6-flash",
         "supports_images": True,
-        "role": "고품질 일반"
+        "role": "빠른 초안 작성"
     },
-    "Claude Sonnet 4.6 (검수 권장)": {
-        "id": "anthropic/claude-sonnet-4.6",
+    "Claude Sonnet 5": {
+        "id": "anthropic/claude-sonnet-5",
         "supports_images": True,
-        "role": "생기부 검수"
+        "role": "생기부 작성 · 검수 권장"
     },
     "Claude Opus 5": {
         "id": "anthropic/claude-opus-5",
         "supports_images": True,
-        "role": "최고급 분석"
+        "role": "정밀 분석"
+    },
+    "GPT-5.6 Sol": {
+        "id": "openai/gpt-5.6-sol",
+        "supports_images": True,
+        "role": "고급 추론 · 복잡한 업무"
     }
 }
+
+# OpenRouter 실시간 가격 정보 동적 조회 및 1시간 캐싱
+@st.cache_data(ttl=3600)
+def fetch_openrouter_pricing():
+    """OpenRouter API에서 실시간 모델 가격 정보(100만 토큰 당 USD)를 1시간 동안 캐싱하여 가져옵니다."""
+    try:
+        import urllib.request
+        import json
+        url = "https://openrouter.ai/api/v1/models"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            models_data = data.get("data", [])
+            
+            pricing_map = {}
+            for m in models_data:
+                m_id = m.get("id")
+                p = m.get("pricing", {})
+                if m_id and p:
+                    try:
+                        # 프로모션/할인 가격이 적용된 현재 실효 가격(effective price) 우선 반영
+                        prompt_val = p.get("discount") if p.get("discount") is not None else p.get("prompt", 0)
+                        completion_val = p.get("discount") if p.get("discount") is not None else p.get("completion", 0)
+                        
+                        prompt_per_token = float(p.get("prompt", 0))
+                        completion_per_token = float(p.get("completion", 0))
+                        
+                        # 할인/프로모션 키 항목이 객체 내 별도로 존재하는 경우 체크
+                        if "request" in p and p.get("request") is not None:
+                            pass
+                        
+                        prompt_1m = prompt_per_token * 1_000_000
+                        completion_1m = completion_per_token * 1_000_000
+                        pricing_map[m_id] = f"${prompt_1m:.2f} / ${completion_1m:.2f}"
+                    except (ValueError, TypeError):
+                        pass
+            return pricing_map
+    except Exception:
+        return {}
 
 # OpenRouter 모델 활성/사용가능 상태 검증 함수
 def check_openrouter_model_availability(model_id):
@@ -244,7 +288,7 @@ if "user_has_manually_chosen_model" not in st.session_state:
     st.session_state.user_has_manually_chosen_model = False
 
 if "selected_model_name" not in st.session_state:
-    st.session_state.selected_model_name = "Gemini 3.5 Flash"
+    st.session_state.selected_model_name = "GPT-5.6 Luna"
 
 # 파일 업로더 초기화를 위한 카운터 Key
 if "uploader_key_chat" not in st.session_state:
@@ -339,7 +383,7 @@ def render_attachments_panel(uploader_key, scope="chat"):
     
     # 2. file uploader
     uploaded_files = st.file_uploader(
-        "📎 파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
+        "파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
         accept_multiple_files=True,
         key=uploader_key,
         label_visibility="collapsed"
@@ -386,9 +430,9 @@ def render_attachments_panel(uploader_key, scope="chat"):
                 with cols[idx]:
                     if item["type"] == "image":
                         st.image(item["data"], use_container_width=True)
-                        st.caption(f"🖼️ {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
+                        st.caption(f"[이미지] {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
                     else:
-                        st.caption(f"📄 {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
+                        st.caption(f"[문서] {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
                     if st.button("삭제", key=f"del_att_{uploader_key}_{global_idx}", use_container_width=True):
                         current_list.pop(global_idx)
                         st.rerun()
@@ -530,12 +574,12 @@ if st.session_state.current_chat_idx is None and not st.session_state.chat_sessi
 mode_from_state = st.session_state.get("mode_control_widget", "일반 챗봇")
 model_keys = list(MODEL_MAP.keys())
 
-# 사용자가 수동으로 변경하지 않은 경우, 생기부 검수 모드 진입 시 Sonnet 4.6 추천
+# 사용자가 수동으로 변경하지 않은 경우, 생기부 작성/검수 진단 모드는 Claude Sonnet 5를 기본 추천
 if not st.session_state.get("user_has_manually_chosen_model", False):
-    if mode_from_state == "생기부 검수/진단":
-        st.session_state.selected_model_name = "Claude Sonnet 4.6 (검수 권장)"
+    if mode_from_state in ["생기부 작성", "생기부 검수/진단"]:
+        st.session_state.selected_model_name = "Claude Sonnet 5"
     else:
-        st.session_state.selected_model_name = "Gemini 3.5 Flash"
+        st.session_state.selected_model_name = "GPT-5.6 Luna"
 
 # 세션에 기록된 모델명의 인덱스 검색
 default_idx = 0
@@ -563,15 +607,21 @@ with col2:
         on_change=on_model_change
     )
     st.session_state.selected_model_name = selected_model_name
-    selected_model = MODEL_MAP[selected_model_name]["id"]
+    selected_model_info = MODEL_MAP[selected_model_name]
+    selected_model = selected_model_info["id"]
+    role_text = selected_model_info["role"]
     
-    desc_map = {
-        "Gemini 3.5 Flash": "⚡ 빠르고 저렴한 일반 사용",
-        "GPT-5.6 Sol": "✨ 고품질 일반 작업",
-        "Claude Sonnet 4.6 (검수 권장)": "🔍 생기부 검수 권장",
-        "Claude Opus 5": "🧠 최고급 정밀 분석"
-    }
-    st.caption(desc_map.get(selected_model_name, ""))
+    # 실시간 가격 데이터 동적 가져오기 (1시간 캐싱)
+    live_pricing = fetch_openrouter_pricing()
+    price_str = live_pricing.get(selected_model, None)
+    
+    if price_str:
+        caption_text = f"{selected_model_name} — {role_text} | {price_str}"
+    else:
+        caption_text = f"{selected_model_name} — {role_text} | 가격 정보 확인 불가"
+        
+    st.caption(caption_text)
+    st.caption("입력 / 출력, 100만 토큰 기준 · OpenRouter 현재 가격")
 
 # 모드 선택
 mode = st.segmented_control(
@@ -591,7 +641,7 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     if mode == "일반 챗봇":
-        if st.button("➕ 새 대화 시작", use_container_width=True):
+        if st.button("새 대화 시작", use_container_width=True):
             chat_key = f"uploader_chat_{st.session_state.uploader_key_chat}"
             if chat_key in st.session_state:
                 del st.session_state[chat_key]
@@ -605,7 +655,7 @@ with st.sidebar:
             
         st.subheader("대화 목록")
         for idx, chat in enumerate(st.session_state.chat_sessions):
-            btn_label = f"💬 {chat['title']}"
+            btn_label = f"{chat['title']}"
             is_active = (idx == st.session_state.current_chat_idx)
             if st.button(
                 btn_label, 
@@ -623,7 +673,7 @@ with st.sidebar:
                 st.rerun()
                 
     elif mode == "생기부 작성":
-        if st.button("➕ 새 학생 작성", use_container_width=True):
+        if st.button("새 학생 작성", use_container_width=True):
             std_key = f"uploader_std_{st.session_state.uploader_key_std}"
             if std_key in st.session_state:
                 del st.session_state[std_key]
@@ -633,9 +683,9 @@ with st.sidebar:
             st.session_state.current_student_idx = None
             st.rerun()
             
-        st.subheader("👥 학생 목록")
+        st.subheader("학생 목록")
         for idx, student in enumerate(st.session_state.student_records):
-            btn_label = f"📄 학번: {student['id_val']}"
+            btn_label = f"학번: {student['id_val']}"
             is_active = (idx == st.session_state.current_student_idx)
             if st.button(
                 btn_label, 
@@ -678,7 +728,7 @@ with st.sidebar:
             excel_data = excel_buffer.getvalue()
             
             st.download_button(
-                label="📂 전체 학생 기록 다운로드 (Excel)",
+                label="전체 학생 기록 다운로드 (Excel)",
                 data=excel_data,
                 file_name="전체생기부기록.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -688,7 +738,7 @@ with st.sidebar:
             st.button("일괄 엑셀 다운로드 (작성 데이터 없음)", disabled=True, use_container_width=True)
         st.markdown("---")
 
-    st.caption(f"⚡ 누적 사용 토큰: **{st.session_state.total_tokens_used:,} Tokens**")
+    st.caption(f"누적 사용 토큰: **{st.session_state.total_tokens_used:,} Tokens**")
     
     if st.button("로그아웃", use_container_width=True):
         st.session_state.authenticated = False

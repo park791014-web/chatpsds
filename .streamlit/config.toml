@@ -6,7 +6,7 @@ textColor = "#f8fafc"
 base = "dark"
 
 [client]
-toolbarMode = "minimal"
+toolbarMode = "viewer"
 showSidebarNavigation = true
 
 [browser]
