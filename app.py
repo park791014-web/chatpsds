@@ -237,45 +237,6 @@ MODEL_MAP = {
     }
 }
 
-# OpenRouter 실시간 가격 정보 동적 조회 및 1시간 캐싱
-@st.cache_data(ttl=3600)
-def fetch_openrouter_pricing():
-    """OpenRouter API에서 실시간 모델 가격 정보(100만 토큰 당 USD)를 1시간 동안 캐싱하여 가져옵니다."""
-    try:
-        import urllib.request
-        import json
-        url = "https://openrouter.ai/api/v1/models"
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read().decode())
-            models_data = data.get("data", [])
-            
-            pricing_map = {}
-            for m in models_data:
-                m_id = m.get("id")
-                p = m.get("pricing", {})
-                if m_id and p:
-                    try:
-                        # 프로모션/할인 가격이 적용된 현재 실효 가격(effective price) 우선 반영
-                        prompt_val = p.get("discount") if p.get("discount") is not None else p.get("prompt", 0)
-                        completion_val = p.get("discount") if p.get("discount") is not None else p.get("completion", 0)
-                        
-                        prompt_per_token = float(p.get("prompt", 0))
-                        completion_per_token = float(p.get("completion", 0))
-                        
-                        # 할인/프로모션 키 항목이 객체 내 별도로 존재하는 경우 체크
-                        if "request" in p and p.get("request") is not None:
-                            pass
-                        
-                        prompt_1m = prompt_per_token * 1_000_000
-                        completion_1m = completion_per_token * 1_000_000
-                        pricing_map[m_id] = f"${prompt_1m:.2f} / ${completion_1m:.2f}"
-                    except (ValueError, TypeError):
-                        pass
-            return pricing_map
-    except Exception:
-        return {}
-
 # OpenRouter 모델 활성/사용가능 상태 검증 함수
 def check_openrouter_model_availability(model_id):
     if "openrouter_models_cache" not in st.session_state:
@@ -332,11 +293,19 @@ if "student_records" not in st.session_state:
 if "current_student_idx" not in st.session_state:
     st.session_state.current_student_idx = None
 
+# 검수 세션 관리 (생기부 검수/진단)
+if "eval_records" not in st.session_state:
+    st.session_state.eval_records = []
+if "current_eval_idx" not in st.session_state:
+    st.session_state.current_eval_idx = None
+if "eval_text_widget" not in st.session_state:
+    st.session_state.eval_text_widget = ""
+
 # 누적 사용 토큰 추적
 if "total_tokens_used" not in st.session_state:
     st.session_state.total_tokens_used = 0
 
-# 검수 결과 캐시 세션
+# 검수 결과 캐시 세션 (기존 단일 세션 호환 유지)
 if "eval_result" not in st.session_state:
     st.session_state.eval_result = ""
 if "eval_target_text" not in st.session_state:
@@ -405,7 +374,49 @@ def render_attachments_panel(uploader_key, scope="chat"):
     
     current_list = st.session_state.attachments[scope]
     
-    # 2. 첨부자료가 존재할 때만 콤팩트 칩스 바 렌더링 (없으면 0px 공간 차지)
+    # 2. Scope별 구분 라벨 (요청사항 7 반영)
+    if scope == "student":
+        st.caption("현재 학생 첨부자료 (파일 선택 또는 Ctrl+V 캡처)")
+    elif scope == "eval":
+        st.caption("검토 첨부자료 (파일 선택 또는 Ctrl+V 캡처)")
+
+    # 3. 항상 노출형 콤팩트 파일 업로더 (요청사항 5 & 6 반영: expander/popover 래핑 없음)
+    uploaded_files = st.file_uploader(
+        "파일 선택 또는 Ctrl+V로 이미지 붙여넣기",
+        accept_multiple_files=True,
+        key=uploader_key,
+        label_visibility="collapsed"
+    )
+    
+    if uploaded_files:
+        for f in uploaded_files:
+            file_bytes = f.getvalue()
+            file_hash = calculate_bytes_hash(file_bytes)
+            
+            if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                import base64
+                b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
+                add_attachment(
+                    name=f.name,
+                    mime_type=f.type,
+                    data_base64=b64_data,
+                    size_bytes=f.size,
+                    source="upload",
+                    file_type="image",
+                    scope=scope
+                )
+            else:
+                text_content = parse_uploaded_file(f)
+                add_document_attachment(
+                    name=f.name,
+                    mime_type=f.type,
+                    text_content=text_content,
+                    size_bytes=f.size,
+                    file_hash=file_hash,
+                    scope=scope
+                )
+
+    # 4. 첨부자료가 존재할 때만 콤팩트 칩스 바 렌더링
     if current_list:
         max_cols = min(len(current_list), 6)
         cols = st.columns(max_cols)
@@ -419,44 +430,6 @@ def render_attachments_panel(uploader_key, scope="chat"):
                 if st.button(btn_label, key=f"del_att_{uploader_key}_{idx}", help=f"{item['name']} ({item['size_kb']:.0f}KB) 삭제"):
                     current_list.pop(idx)
                     st.rerun()
-
-    # 3. 콤팩트 팝오버버튼
-    with st.popover("자료 첨부 / Ctrl+V", use_container_width=False):
-        st.caption("파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX, 이미지 지원)")
-        uploaded_files = st.file_uploader(
-            "파일 선택",
-            accept_multiple_files=True,
-            key=uploader_key,
-            label_visibility="collapsed"
-        )
-        
-        if uploaded_files:
-            for f in uploaded_files:
-                file_bytes = f.getvalue()
-                file_hash = calculate_bytes_hash(file_bytes)
-                
-                if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                    import base64
-                    b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
-                    add_attachment(
-                        name=f.name,
-                        mime_type=f.type,
-                        data_base64=b64_data,
-                        size_bytes=f.size,
-                        source="upload",
-                        file_type="image",
-                        scope=scope
-                    )
-                else:
-                    text_content = parse_uploaded_file(f)
-                    add_document_attachment(
-                        name=f.name,
-                        mime_type=f.type,
-                        text_content=text_content,
-                        size_bytes=f.size,
-                        file_hash=file_hash,
-                        scope=scope
-                    )
 
 def compile_api_payload(prompt, selected_model_name, scope="chat"):
     images = []
@@ -715,7 +688,42 @@ with st.sidebar:
                 st.rerun()
                 
     elif mode == "생기부 검수/진단":
-        st.info("작성된 생기부 문장을 업로드하거나 입력하시면 AI가 다각도로 정밀 진단합니다.")
+        if st.button("새 검토", use_container_width=True):
+            eval_key = f"uploader_eval_{st.session_state.uploader_key_eval}"
+            if eval_key in st.session_state:
+                del st.session_state[eval_key]
+            st.session_state.uploader_key_eval += 1
+            st.session_state.attachments["eval"] = []
+            
+            st.session_state.current_eval_idx = None
+            st.session_state.eval_result = ""
+            st.session_state.eval_target_text = ""
+            st.session_state.eval_text_widget = ""
+            st.rerun()
+            
+        st.subheader("검토 목록")
+        for idx, rec in enumerate(st.session_state.eval_records):
+            btn_label = f"{rec.get('title', f'검토 {idx+1}')}"
+            is_active = (idx == st.session_state.current_eval_idx)
+            if st.button(
+                btn_label, 
+                key=f"eval_btn_{idx}", 
+                use_container_width=True, 
+                type="primary" if is_active else "secondary"
+            ):
+                eval_key = f"uploader_eval_{st.session_state.uploader_key_eval}"
+                if eval_key in st.session_state:
+                    del st.session_state[eval_key]
+                st.session_state.uploader_key_eval += 1
+                st.session_state.attachments["eval"] = []
+                
+                st.session_state.current_eval_idx = idx
+                st.session_state.eval_target_text = rec.get("target_text", "")
+                st.session_state.eval_text_widget = rec.get("target_text", "")
+                st.session_state.eval_result = rec.get("result", "")
+                if rec.get("model") and rec.get("model") in MODEL_MAP:
+                    st.session_state.selected_model_name = rec.get("model")
+                st.rerun()
 
     st.markdown("---")
     
@@ -1008,30 +1016,47 @@ elif mode == "생기부 검수/진단":
     st.subheader("생기부 전문 진단 및 검수기")
     st.caption("기존에 작성된 생기부 문장을 업로드하거나 직접 입력하시면 지침 위반, 장단점, 문체 오류를 정밀 분석합니다.")
     
+    curr_eval_idx = st.session_state.current_eval_idx
+    if curr_eval_idx is not None and curr_eval_idx < len(st.session_state.eval_records):
+        curr_eval_rec = st.session_state.eval_records[curr_eval_idx]
+        default_eval_text = curr_eval_rec.get("target_text", "")
+        default_eval_result = curr_eval_rec.get("result", "")
+    else:
+        default_eval_text = st.session_state.get("eval_target_text", "")
+        default_eval_result = st.session_state.get("eval_result", "")
+    
     col_e1, col_e2 = st.columns([3, 1])
     with col_e2:
-        if st.session_state.eval_result:
-            if st.button("새로 검수하기", width="stretch"):
+        if default_eval_result or default_eval_text:
+            if st.button("새로 검수하기", use_container_width=True):
+                eval_key = f"uploader_eval_{st.session_state.uploader_key_eval}"
+                if eval_key in st.session_state:
+                    del st.session_state[eval_key]
+                st.session_state.uploader_key_eval += 1
+                st.session_state.attachments["eval"] = []
+                st.session_state.current_eval_idx = None
                 st.session_state.eval_result = ""
                 st.session_state.eval_target_text = ""
+                st.session_state.eval_text_widget = ""
                 st.rerun()
 
-    eval_input_text = st.text_area("검수할 생기부 문장 직접 입력", height=180, placeholder="검수하고자 하는 생기부 특기사항 문단을 복사해서 붙여넣으세요.")
+    eval_input_text = st.text_area(
+        "검수할 생기부 문장 직접 입력",
+        height=140,
+        placeholder="검수하고자 하는 생기부 특기사항 문단을 복사해서 붙여넣으세요.",
+        key="eval_text_widget"
+    )
     
     # 공통 첨부파일 패널 렌더링 (eval 스코프 지정 - 입력창 바로 아래 배치)
     render_attachments_panel(uploader_key=f"uploader_eval_{st.session_state.uploader_key_eval}", scope="eval")
     
-    # 텍스트 검수 대상 설정 (중복 전달 제거를 위해 첨부파일 텍스트는 compile_api_payload가 처리하도록 격리)
     target_eval_text = eval_input_text
     
-    if not target_eval_text and st.session_state.eval_target_text:
-        target_eval_text = st.session_state.eval_target_text
-        
     if target_eval_text:
         c_cnt, b_cnt = calculate_neis_bytes(target_eval_text)
-        st.write(f"검수 대상 분량: {c_cnt}자 / **{b_cnt} Byte** (NEIS 기준)")
+        st.caption(f"검수 대상 분량: {c_cnt}자 / **{b_cnt} Byte** (NEIS 기준)")
         
-    if st.button("생기부 정밀 진단 시작", type="primary"):
+    if st.button("생기부 정밀 진단 시작", type="primary", use_container_width=True):
         if target_eval_text or any(item["type"] == "image" for item in st.session_state.attachments["eval"]) or any(item["type"] == "document" for item in st.session_state.attachments["eval"]):
             if not check_openrouter_model_availability(selected_model):
                 st.error("현재 선택한 AI 모델을 OpenRouter에서 사용할 수 없습니다. 관리자에게 모델 설정을 확인해 주세요.")
@@ -1062,28 +1087,70 @@ elif mode == "생기부 검수/진단":
                                 {"role": "user", "content": user_payload}
                             ]
                         )
-                        eval_result = response.choices[0].message.content
+                        eval_res_str = response.choices[0].message.content
                         
+                        tokens_count = 0
                         if hasattr(response, 'usage') and response.usage:
-                            tokens = response.usage.total_tokens
-                            st.session_state.total_tokens_used += tokens
+                            tokens_count = response.usage.total_tokens
+                            st.session_state.total_tokens_used += tokens_count
                         
-                        # 검수 성공 시 첨부 파일 리셋 및 uploader key 갱신으로 상태 초기화
+                        # 자동 제목 생성 (12~18자)
+                        if target_eval_text and target_eval_text.strip():
+                            clean_text = target_eval_text.strip().replace("\n", " ")
+                            title_str = clean_text[:15] + "..." if len(clean_text) > 15 else clean_text
+                        else:
+                            title_str = "첨부자료 검토"
+
+                        from datetime import datetime
+                        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+                        if curr_eval_idx is not None and curr_eval_idx < len(st.session_state.eval_records):
+                            old_rec = st.session_state.eval_records[curr_eval_idx]
+                            created_at_val = old_rec.get("created_at", old_rec.get("updated_at", now_str))
+                            new_eval_record = {
+                                "title": title_str,
+                                "target_text": target_eval_text,
+                                "result": eval_res_str,
+                                "model": selected_model_name,
+                                "tokens": tokens_count,
+                                "created_at": created_at_val,
+                                "updated_at": now_str
+                            }
+                            st.session_state.eval_records[curr_eval_idx] = new_eval_record
+                        else:
+                            new_eval_record = {
+                                "title": title_str,
+                                "target_text": target_eval_text,
+                                "result": eval_res_str,
+                                "model": selected_model_name,
+                                "tokens": tokens_count,
+                                "created_at": now_str,
+                                "updated_at": now_str
+                            }
+                            st.session_state.eval_records.append(new_eval_record)
+                            st.session_state.current_eval_idx = len(st.session_state.eval_records) - 1
+
+                        st.session_state.eval_result = eval_res_str
+                        st.session_state.eval_target_text = target_eval_text
+                        st.session_state.eval_text_widget = target_eval_text
+
+                        # 성공 시 첨부 파일 리셋 및 uploader key 갱신으로 상태 완전 초기화
                         st.session_state.attachments["eval"] = []
                         eval_key = f"uploader_eval_{st.session_state.uploader_key_eval}"
                         if eval_key in st.session_state:
                             del st.session_state[eval_key]
                         st.session_state.uploader_key_eval += 1
                         
-                        st.session_state.eval_result = eval_result
-                        st.session_state.eval_target_text = target_eval_text
                         st.rerun()
                     except Exception as e:
                         st.error(f"진단 중 오류 발생: {str(e)}")
         else:
             st.warning("검수할 파일이나 텍스트를 입력해 주세요.")
 
-    if st.session_state.eval_result:
+    if default_eval_result:
         st.divider()
         st.markdown("### AI 생기부 정밀 진단 결과")
-        st.markdown(st.session_state.eval_result)
+        if curr_eval_idx is not None and curr_eval_idx < len(st.session_state.eval_records):
+            rec_info = st.session_state.eval_records[curr_eval_idx]
+            st.caption(f"검토 모델: **{rec_info.get('model', selected_model_name)}** | 사용 토큰: **{rec_info.get('tokens', 0):,} Tokens**")
+        st.markdown(default_eval_result)
