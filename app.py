@@ -16,7 +16,7 @@ st.set_page_config(page_title="Chat PSDongSung", layout="wide", initial_sidebar_
 hide_streamlit_chrome()
 
 # ==========================================
-# 고급 타이포그래피 & 여백 조절 & Sticky Header CSS
+# 컴팩트 레이아웃 & 고밀도 Sticky Header CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -26,13 +26,22 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* 기본 메인 컨테이너 패딩 */
+    /* 메인 컨테이너 세로 패딩 40% 축소 */
     .block-container {
-        padding-top: 3.5rem !important;
-        padding-bottom: 2rem !important;
+        padding-top: 2.2rem !important;
+        padding-bottom: 1.2rem !important;
     }
     
-    /* 상단 Sticky 고정 헤더 컨테이너 */
+    /* Streamlit 수직 요소 간격 고밀도화 */
+    div[data-testid="stVerticalBlock"] {
+        gap: 0.5rem !important;
+    }
+    
+    div[data-testid="stExpander"] {
+        margin-bottom: 0.4rem !important;
+    }
+    
+    /* 상단 Sticky 고정 헤더 컨테이너 컴팩트화 */
     div[data-testid="stVerticalBlock"] > div:has(div[key="sticky_header"]),
     div[key="sticky_header"],
     [data-testid="stElementContainer"]:has(div[key="sticky_header"]) {
@@ -40,23 +49,23 @@ st.markdown("""
         top: 2.8rem !important;
         z-index: 9999 !important;
         background-color: #0f172a !important;
-        padding-top: 0.5rem !important;
-        padding-bottom: 0.8rem !important;
-        margin-bottom: 1rem !important;
+        padding-top: 0.2rem !important;
+        padding-bottom: 0.3rem !important;
+        margin-bottom: 0.4rem !important;
         border-bottom: 1px solid #334155 !important;
     }
     
-    /* 메인 화면 브랜드 헤더 */
+    /* 메인 화면 브랜드 헤더 여백 축소 */
     .brand-header {
-        margin-bottom: 0.5rem;
-        padding-top: 0.2rem;
-        padding-bottom: 0.4rem;
+        margin-bottom: 0.2rem;
+        padding-top: 0.1rem;
+        padding-bottom: 0.2rem;
     }
     
     /* 테마 고정에 따라 항상 밝고 선명한 텍스트 가시성 유지 */
     .brand-title {
         color: #f8fafc !important;
-        font-size: 1.8rem;
+        font-size: 1.6rem;
         font-weight: 800;
         letter-spacing: -0.5px;
         margin: 0;
@@ -394,9 +403,26 @@ def render_attachments_panel(uploader_key, scope="chat"):
             
     paste_listener(key=paste_key, on_pasted_image=handle_pasted_image)
     
-    # 2. file uploader (팝오버 콤팩트 패널)
-    with st.popover("자료 첨부 및 Ctrl+V 캡처", use_container_width=False):
-        st.write("파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)")
+    current_list = st.session_state.attachments[scope]
+    
+    # 2. 첨부자료가 존재할 때만 콤팩트 칩스 바 렌더링 (없으면 0px 공간 차지)
+    if current_list:
+        max_cols = min(len(current_list), 6)
+        cols = st.columns(max_cols)
+        for idx, item in enumerate(current_list):
+            with cols[idx % max_cols]:
+                if item["type"] == "image":
+                    st.image(item["data"], width=45)
+                    btn_label = f"✕ {item['name'][:8]}"
+                else:
+                    btn_label = f"✕ [문서]{item['name'][:8]}"
+                if st.button(btn_label, key=f"del_att_{uploader_key}_{idx}", help=f"{item['name']} ({item['size_kb']:.0f}KB) 삭제"):
+                    current_list.pop(idx)
+                    st.rerun()
+
+    # 3. 콤팩트 팝오버버튼
+    with st.popover("자료 첨부 / Ctrl+V", use_container_width=False):
+        st.caption("파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX, 이미지 지원)")
         uploaded_files = st.file_uploader(
             "파일 선택",
             accept_multiple_files=True,
@@ -431,26 +457,6 @@ def render_attachments_panel(uploader_key, scope="chat"):
                         file_hash=file_hash,
                         scope=scope
                     )
-                    
-    # 3. Preview grid for current attachments (scope 별로 대기열 및 개별 삭제 표시)
-    current_list = st.session_state.attachments[scope]
-    if current_list:
-        st.caption(f"첨부자료 대기열 ({len(current_list)}개):")
-        chunk_size = 4
-        for i in range(0, len(current_list), chunk_size):
-            row_items = current_list[i : i + chunk_size]
-            cols = st.columns(4)  # 항상 4개 열을 구성하여 썸네일 크기를 일관성 있게 유지
-            for idx, item in enumerate(row_items):
-                global_idx = i + idx
-                with cols[idx]:
-                    if item["type"] == "image":
-                        st.image(item["data"], use_container_width=True)
-                        st.caption(f"[이미지] {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
-                    else:
-                        st.caption(f"[문서] {item['name'][:12]}... ({item['size_kb']:.1f} KB)")
-                    if st.button("삭제", key=f"del_att_{uploader_key}_{global_idx}", use_container_width=True):
-                        current_list.pop(global_idx)
-                        st.rerun()
 
 def compile_api_payload(prompt, selected_model_name, scope="chat"):
     images = []
@@ -845,8 +851,8 @@ if mode == "일반 챗봇":
             st.rerun()
 
 elif mode == "생기부 작성":
-    with st.expander("[공통] 교육과정 / 성취기준 및 개별 문체 가이드 등록", expanded=True):
-        st.caption("과목별 성취기준 문서와 선생님 고유의 작성 스타일 예시 문장을 등록해 주세요.")
+    with st.expander("공통 참조자료", expanded=False):
+        st.caption("과목별 성취기준이나 참고자료가 있을 경우 첨부하세요.")
         global_ref_files = st.file_uploader(
             "공통 참조 파일 업로드 (PDF, HWP 등)",
             accept_multiple_files=True,
@@ -859,15 +865,7 @@ elif mode == "생기부 작성":
             for g_file in global_ref_files:
                 ref_texts.append(f"\n\n[공통참조문서: {g_file.name}]\n" + parse_uploaded_file(g_file))
             global_ref_text = "".join(ref_texts)
-            st.success(f"총 {len(global_ref_files)}개의 공통 참조 문서가 반영되었습니다. (프롬프트 캐싱 적용됨)")
-                
-        teacher_style_guide = st.text_area(
-            "선생님 개별 작성 스타일(문체) 가이드 예시 문장",
-            height=80,
-            placeholder="평소 즐겨 쓰는 어조나 문장 구조 예시를 적어주세요. (예: 주도적인 탐구 태도와 논리적 사고 과정을 강조하며 서술함)"
-        )
-
-    st.divider()
+            st.success(f"총 {len(global_ref_files)}개의 공통 참조 문서가 반영되었습니다.")
 
     curr_std_idx = st.session_state.current_student_idx
     if curr_std_idx is not None and curr_std_idx < len(st.session_state.student_records):
@@ -886,11 +884,11 @@ elif mode == "생기부 작성":
             index=["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"].index(default_type) if default_type in ["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"] else 0
         )
         
-    student_memo = st.text_area("학생 관찰 내용 및 키워드", value=default_memo, height=120, placeholder="수업 참여도, 수행평가 과정, 특기사항 등 입력")
+    student_memo = st.text_area("학생 관찰 내용 및 키워드", value=default_memo, height=95, placeholder="수업 참여도, 수행평가 과정, 특기사항 등 입력")
     
     render_attachments_panel(uploader_key=f"uploader_std_{st.session_state.uploader_key_std}", scope="student")
     
-    if st.button("초안 생성", type="primary"):
+    if st.button("초안 생성", type="primary", use_container_width=True):
         if student_id:
             info_str = f"학번: {student_id}"
             
@@ -908,20 +906,19 @@ elif mode == "생기부 작성":
                             "2022 개정 교육과정 기준 및 학교생활기록부 기재요령에 맞추어 다음 작성 지침을 '엄격히' 준수하세요:\n\n"
                             "1. [문장 시작 규칙 - 필수]: 문장 시작 시 '000 학생은', 'OOO 학생은', 'OO은' 같은 이름이나 학생 주어를 절대로 사용하지 마세요. 곧바로 학생의 학업적 성취 특성이나 활동 내용으로 문장을 바로 시작하세요.\n\n"
                             "2. [표현 제한 - 필수]: 영어 단어, 알파벳, 괄호 안 영문 병기(예: English) 및 중간점(·) 등의 특수문자를 절대로 사용하지 마세요. 모든 개념과 단어는 정돈된 표준 한글로만 작성하세요.\n\n"
-                            f"3. [선생님 문체 가이드]: {teacher_style_guide if teacher_style_guide else '표준 교육용 어조 사용'}\n\n"
-                            "4. [공통 참조 자료 반영]: 제시된 [공통 교육과정/성취기준 참조 자료]의 성취기준 및 교과역량을 적극 반영하여 작성하세요.\n\n"
-                            "5. [영역별 작성 지침]:\n"
+                            "3. [공통 참조 자료 반영]: 제시된 [공통 교육과정/성취기준 참조 자료]의 성취기준 및 교과역량을 적극 반영하여 작성하세요.\n\n"
+                            "4. [영역별 작성 지침]:\n"
                             f"   - 현재 작성 영역: {record_type}\n"
                             "   - 교과세특인 경우: 성취수준 + 수행 과정 및 결과(과제, 분석내용, 도구) + 교과 핵심역량 + 교사 총평 구조 포함.\n"
                             "   - 창체/행발인 경우: 행동 특성, 공동체 의식, 주도적 활동 및 변화 모습을 구체적으로 진술.\n\n"
-                            "6. [어조 및 분량]:\n"
+                            "5. [어조 및 분량]:\n"
                             "   - 문장 끝은 반드시 '~함', '~임' 어조로만 작성하세요.\n"
                             "   - 영역별 권장 바이트 한도 내에서 문장을 구체적이고 풍성하게 기술하세요.\n\n"
-                            "7. [기재 금지어]: 대회, 수상, 외부 기관명, 공인어학성적, 사교육 관련 내용 절대 언급 금지."
+                            "6. [기재 금지어]: 대회, 수상, 외부 기관명, 공인어학성적, 사교육 관련 내용 절대 언급 금지."
                         )
                         
                         # 프롬프트 구성 및 공통 첨부자료 빌더 통합
-                        prompt_base = f"[작성 정보]: {info_str} ({record_type})\n[선생님 문체 가이드]: {teacher_style_guide}\n[학생 관찰 메모]: {student_memo}"
+                        prompt_base = f"[작성 정보]: {info_str} ({record_type})\n[학생 관찰 메모]: {student_memo}"
                         if global_ref_text:
                             prompt_base += f"\n[공통 교육과정/성취기준 참조 자료]:\n{global_ref_text}"
                             
