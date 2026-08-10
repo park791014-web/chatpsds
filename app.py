@@ -16,7 +16,7 @@ st.set_page_config(page_title="Chat PSDongSung", layout="wide", initial_sidebar_
 hide_streamlit_chrome()
 
 # ==========================================
-# 고급 타이포그래피 & 여백 조절 CSS
+# 고급 타이포그래피 & 여백 조절 & Sticky Header CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -32,12 +32,25 @@ st.markdown("""
         padding-bottom: 2rem !important;
     }
     
+    /* 상단 Sticky 고정 헤더 컨테이너 */
+    div[data-testid="stVerticalBlock"] > div:has(div[key="sticky_header"]),
+    div[key="sticky_header"],
+    [data-testid="stElementContainer"]:has(div[key="sticky_header"]) {
+        position: sticky !important;
+        top: 2.8rem !important;
+        z-index: 9999 !important;
+        background-color: #0f172a !important;
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.8rem !important;
+        margin-bottom: 1rem !important;
+        border-bottom: 1px solid #334155 !important;
+    }
+    
     /* 메인 화면 브랜드 헤더 */
     .brand-header {
-        margin-bottom: 0.8rem;
-        padding-top: 0.3rem;
-        padding-bottom: 0.6rem;
-        border-bottom: 1px solid #334155;
+        margin-bottom: 0.5rem;
+        padding-top: 0.2rem;
+        padding-bottom: 0.4rem;
     }
     
     /* 테마 고정에 따라 항상 밝고 선명한 텍스트 가시성 유지 */
@@ -381,46 +394,48 @@ def render_attachments_panel(uploader_key, scope="chat"):
             
     paste_listener(key=paste_key, on_pasted_image=handle_pasted_image)
     
-    # 2. file uploader
-    uploaded_files = st.file_uploader(
-        "파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)",
-        accept_multiple_files=True,
-        key=uploader_key,
-        label_visibility="collapsed"
-    )
-    
-    if uploaded_files:
-        for f in uploaded_files:
-            file_bytes = f.getvalue()
-            file_hash = calculate_bytes_hash(file_bytes)
-            
-            if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                import base64
-                b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
-                add_attachment(
-                    name=f.name,
-                    mime_type=f.type,
-                    data_base64=b64_data,
-                    size_bytes=f.size,
-                    source="upload",
-                    file_type="image",
-                    scope=scope
-                )
-            else:
-                text_content = parse_uploaded_file(f)
-                add_document_attachment(
-                    name=f.name,
-                    mime_type=f.type,
-                    text_content=text_content,
-                    size_bytes=f.size,
-                    file_hash=file_hash,
-                    scope=scope
-                )
+    # 2. file uploader (팝오버 콤팩트 패널)
+    with st.popover("자료 첨부 및 Ctrl+V 캡처", use_container_width=False):
+        st.write("파일 선택 또는 Ctrl+V로 화면 캡처 붙여넣기 (PDF, HWP, XLSX, DOCX, PPTX 및 이미지 지원)")
+        uploaded_files = st.file_uploader(
+            "파일 선택",
+            accept_multiple_files=True,
+            key=uploader_key,
+            label_visibility="collapsed"
+        )
+        
+        if uploaded_files:
+            for f in uploaded_files:
+                file_bytes = f.getvalue()
+                file_hash = calculate_bytes_hash(file_bytes)
                 
-    # 3. Preview grid for current attachments (FHD 기준 한 행 최대 4개 썸네일 그리드로 표시)
+                if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    import base64
+                    b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
+                    add_attachment(
+                        name=f.name,
+                        mime_type=f.type,
+                        data_base64=b64_data,
+                        size_bytes=f.size,
+                        source="upload",
+                        file_type="image",
+                        scope=scope
+                    )
+                else:
+                    text_content = parse_uploaded_file(f)
+                    add_document_attachment(
+                        name=f.name,
+                        mime_type=f.type,
+                        text_content=text_content,
+                        size_bytes=f.size,
+                        file_hash=file_hash,
+                        scope=scope
+                    )
+                    
+    # 3. Preview grid for current attachments (scope 별로 대기열 및 개별 삭제 표시)
     current_list = st.session_state.attachments[scope]
     if current_list:
-        st.write("첨부자료 대기열:")
+        st.caption(f"첨부자료 대기열 ({len(current_list)}개):")
         chunk_size = 4
         for i in range(0, len(current_list), chunk_size):
             row_items = current_list[i : i + chunk_size]
@@ -570,57 +585,58 @@ if st.session_state.current_chat_idx is None and not st.session_state.chat_sessi
     st.session_state.chat_sessions.append({"title": "새 대화", "messages": []})
     st.session_state.current_chat_idx = 0
 
-# 4. 상단 헤더
-mode_from_state = st.session_state.get("mode_control_widget", "일반 챗봇")
-model_keys = list(MODEL_MAP.keys())
+# 4. 상단 고정 헤더 (제목 / 모델 선택 / 모드 탭)
+with st.container(key="sticky_header"):
+    mode_from_state = st.session_state.get("mode_control_widget", "일반 챗봇")
+    model_keys = list(MODEL_MAP.keys())
 
-# 사용자가 수동으로 변경하지 않은 경우, 생기부 작성/검수 진단 모드는 Claude Sonnet 5를 기본 추천
-if not st.session_state.get("user_has_manually_chosen_model", False):
-    if mode_from_state in ["생기부 작성", "생기부 검수/진단"]:
-        st.session_state.selected_model_name = "Claude Sonnet 5"
-    else:
-        st.session_state.selected_model_name = "GPT-5.6 Luna"
+    # 사용자가 수동으로 변경하지 않은 경우, 생기부 작성/검수 진단 모드는 Claude Sonnet 5를 기본 추천
+    if not st.session_state.get("user_has_manually_chosen_model", False):
+        if mode_from_state in ["생기부 작성", "생기부 검수/진단"]:
+            st.session_state.selected_model_name = "Claude Sonnet 5"
+        else:
+            st.session_state.selected_model_name = "GPT-5.6 Luna"
 
-# 세션에 기록된 모델명의 인덱스 검색
-default_idx = 0
-if st.session_state.selected_model_name in model_keys:
-    default_idx = model_keys.index(st.session_state.selected_model_name)
+    # 세션에 기록된 모델명의 인덱스 검색
+    default_idx = 0
+    if st.session_state.selected_model_name in model_keys:
+        default_idx = model_keys.index(st.session_state.selected_model_name)
 
-col1, col2 = st.columns([3, 1], vertical_alignment="center")
-with col1:
-    st.markdown("""
-        <div class="brand-header">
-            <div class="brand-title">Chat <span class="brand-accent">PSDongSung</span></div>
-            <div class="brand-sub">교사 전용 스마트 AI 에이전트</div>
-        </div>
-    """, unsafe_allow_html=True)
-with col2:
-    def on_model_change():
-        st.session_state.user_has_manually_chosen_model = True
+    col1, col2 = st.columns([3, 1], vertical_alignment="center")
+    with col1:
+        st.markdown("""
+            <div class="brand-header">
+                <div class="brand-title">Chat <span class="brand-accent">PSDongSung</span></div>
+                <div class="brand-sub">교사 전용 스마트 AI 에이전트</div>
+            </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        def on_model_change():
+            st.session_state.user_has_manually_chosen_model = True
 
-    selected_model_name = st.selectbox(
-        "모델 선택",
-        model_keys,
-        index=default_idx,
+        selected_model_name = st.selectbox(
+            "모델 선택",
+            model_keys,
+            index=default_idx,
+            label_visibility="collapsed",
+            key="model_selectbox_widget",
+            on_change=on_model_change
+        )
+        st.session_state.selected_model_name = selected_model_name
+        selected_model_info = MODEL_MAP[selected_model_name]
+        selected_model = selected_model_info["id"]
+        role_text = selected_model_info["role"]
+        
+        st.caption(role_text)
+
+    # 모드 선택
+    mode = st.segmented_control(
+        "모드",
+        ["일반 챗봇", "생기부 작성", "생기부 검수/진단"],
+        default="일반 챗봇",
         label_visibility="collapsed",
-        key="model_selectbox_widget",
-        on_change=on_model_change
+        key="mode_control_widget"
     )
-    st.session_state.selected_model_name = selected_model_name
-    selected_model_info = MODEL_MAP[selected_model_name]
-    selected_model = selected_model_info["id"]
-    role_text = selected_model_info["role"]
-    
-    st.caption(role_text)
-
-# 모드 선택
-mode = st.segmented_control(
-    "모드",
-    ["일반 챗봇", "생기부 작성", "생기부 검수/진단"],
-    default="일반 챗봇",
-    label_visibility="collapsed",
-    key="mode_control_widget"
-)
 
 # 5. 사이드바 구성
 with st.sidebar:
@@ -741,10 +757,7 @@ if mode == "일반 챗봇":
     curr_idx = st.session_state.current_chat_idx if st.session_state.current_chat_idx is not None else 0
     current_chat = st.session_state.chat_sessions[curr_idx]
     
-    # 공통 첨부파일 패널 렌더링 (chat 스코프 지정)
-    render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
-    
-    # 대화 히스토리 화면 표시 (이미지 렌더링 지원)
+    # 1. 대화 히스토리 화면 먼저 표시
     for msg in current_chat["messages"]:
         with st.chat_message(msg["role"]):
             if isinstance(msg["content"], list):
@@ -758,7 +771,10 @@ if mode == "일반 챗봇":
             if "tokens" in msg:
                 st.caption(f"소모 토큰: {msg['tokens']:,} Tokens")
 
-    # 입력창 제출 대기
+    # 2. 대화 기록 바로 아래 (채팅 입력창 직전)에 첨부자료 패널 배치
+    render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
+
+    # 3. 입력창 제출 대기
     if prompt := st.chat_input("Chat PSDongSung에게 물어보기"):
         # 공통 API 페이로드 컴파일 (chat 스코프 지정)
         user_content = compile_api_payload(prompt, selected_model_name, scope="chat")
@@ -870,9 +886,9 @@ elif mode == "생기부 작성":
             index=["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"].index(default_type) if default_type in ["교과세특 (1,500 Byte)", "행동특성 및 종합의견 (1,500 Byte)", "자율활동 (1,500 Byte)", "동아리활동 (1,500 Byte)", "진로활동 (2,100 Byte)"] else 0
         )
         
-    render_attachments_panel(uploader_key=f"uploader_std_{st.session_state.uploader_key_std}", scope="student")
-    
     student_memo = st.text_area("학생 관찰 내용 및 키워드", value=default_memo, height=120, placeholder="수업 참여도, 수행평가 과정, 특기사항 등 입력")
+    
+    render_attachments_panel(uploader_key=f"uploader_std_{st.session_state.uploader_key_std}", scope="student")
     
     if st.button("초안 생성", type="primary"):
         if student_id:
@@ -1003,9 +1019,10 @@ elif mode == "생기부 검수/진단":
                 st.session_state.eval_target_text = ""
                 st.rerun()
 
-    # 공통 첨부파일 패널 렌더링 (eval 스코프 지정)
-    render_attachments_panel(uploader_key=f"uploader_eval_{st.session_state.uploader_key_eval}", scope="eval")
     eval_input_text = st.text_area("검수할 생기부 문장 직접 입력", height=180, placeholder="검수하고자 하는 생기부 특기사항 문단을 복사해서 붙여넣으세요.")
+    
+    # 공통 첨부파일 패널 렌더링 (eval 스코프 지정 - 입력창 바로 아래 배치)
+    render_attachments_panel(uploader_key=f"uploader_eval_{st.session_state.uploader_key_eval}", scope="eval")
     
     # 텍스트 검수 대상 설정 (중복 전달 제거를 위해 첨부파일 텍스트는 compile_api_payload가 처리하도록 격리)
     target_eval_text = eval_input_text
