@@ -186,29 +186,65 @@ def calculate_image_hash(base64_data):
     payload = base64_data.split(",")[-1]
     return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
-# 모델 라인업 설정 (기능 지원 여부 일원화 관리)
+# 모델 라인업 설정 (기능 지원 여부 및 역할 일원화 관리)
 MODEL_MAP = {
-    "Claude Opus 5": {
-        "id": "anthropic/claude-opus-5",
-        "supports_images": True
+    "Gemini 3.5 Flash": {
+        "id": "google/gemini-3.5-flash",
+        "supports_images": True,
+        "role": "일반 사용"
     },
     "GPT-5.6 Sol": {
         "id": "openai/gpt-5.6-sol",
-        "supports_images": True
+        "supports_images": True,
+        "role": "고품질 일반"
     },
-    "Gemini 3.5 Flash": {
-        "id": "google/gemini-flash-1.5",
-        "supports_images": True
+    "Claude Sonnet 4.6 (검수 권장)": {
+        "id": "anthropic/claude-sonnet-4.6",
+        "supports_images": True,
+        "role": "생기부 검수"
     },
-    "Claude 3.5 Sonnet (검수 권장)": {
-        "id": "anthropic/claude-3.5-sonnet:beta",
-        "supports_images": True
+    "Claude Opus 5": {
+        "id": "anthropic/claude-opus-5",
+        "supports_images": True,
+        "role": "최고급 분석"
     }
 }
+
+# OpenRouter 모델 활성/사용가능 상태 검증 함수
+def check_openrouter_model_availability(model_id):
+    if "openrouter_models_cache" not in st.session_state:
+        st.session_state.openrouter_models_cache = None
+        
+    if st.session_state.openrouter_models_cache is None:
+        try:
+            import urllib.request
+            import json
+            url = "https://openrouter.ai/api/v1/models"
+            req = urllib.request.Request(
+                url, 
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req, timeout=4) as response:
+                res_data = json.loads(response.read().decode())
+                available_ids = {m.get("id") for m in res_data.get("data", []) if m.get("id")}
+                st.session_state.openrouter_models_cache = available_ids
+        except Exception:
+            # 네트워크 타임아웃 등의 이슈로 조회가 실패하면 중단 방지를 위해 통과시킴
+            return True
+            
+    if st.session_state.openrouter_models_cache:
+        return model_id in st.session_state.openrouter_models_cache
+    return True
 
 # 2. 세션 상태 초기화
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+
+if "user_has_manually_chosen_model" not in st.session_state:
+    st.session_state.user_has_manually_chosen_model = False
+
+if "selected_model_name" not in st.session_state:
+    st.session_state.selected_model_name = "Gemini 3.5 Flash"
 
 # 파일 업로더 초기화를 위한 카운터 Key
 if "uploader_key_chat" not in st.session_state:
@@ -491,6 +527,21 @@ if st.session_state.current_chat_idx is None and not st.session_state.chat_sessi
     st.session_state.current_chat_idx = 0
 
 # 4. 상단 헤더
+mode_from_state = st.session_state.get("mode_control_widget", "일반 챗봇")
+model_keys = list(MODEL_MAP.keys())
+
+# 사용자가 수동으로 변경하지 않은 경우, 생기부 검수 모드 진입 시 Sonnet 4.6 추천
+if not st.session_state.get("user_has_manually_chosen_model", False):
+    if mode_from_state == "생기부 검수/진단":
+        st.session_state.selected_model_name = "Claude Sonnet 4.6 (검수 권장)"
+    else:
+        st.session_state.selected_model_name = "Gemini 3.5 Flash"
+
+# 세션에 기록된 모델명의 인덱스 검색
+default_idx = 0
+if st.session_state.selected_model_name in model_keys:
+    default_idx = model_keys.index(st.session_state.selected_model_name)
+
 col1, col2 = st.columns([3, 1], vertical_alignment="center")
 with col1:
     st.markdown("""
@@ -500,19 +551,35 @@ with col1:
         </div>
     """, unsafe_allow_html=True)
 with col2:
+    def on_model_change():
+        st.session_state.user_has_manually_chosen_model = True
+
     selected_model_name = st.selectbox(
         "모델 선택",
-        list(MODEL_MAP.keys()),
-        label_visibility="collapsed"
+        model_keys,
+        index=default_idx,
+        label_visibility="collapsed",
+        key="model_selectbox_widget",
+        on_change=on_model_change
     )
+    st.session_state.selected_model_name = selected_model_name
     selected_model = MODEL_MAP[selected_model_name]["id"]
+    
+    desc_map = {
+        "Gemini 3.5 Flash": "⚡ 빠르고 저렴한 일반 사용",
+        "GPT-5.6 Sol": "✨ 고품질 일반 작업",
+        "Claude Sonnet 4.6 (검수 권장)": "🔍 생기부 검수 권장",
+        "Claude Opus 5": "🧠 최고급 정밀 분석"
+    }
+    st.caption(desc_map.get(selected_model_name, ""))
 
 # 모드 선택
 mode = st.segmented_control(
     "모드",
     ["일반 챗봇", "생기부 작성", "생기부 검수/진단"],
     default="일반 챗봇",
-    label_visibility="collapsed"
+    label_visibility="collapsed",
+    key="mode_control_widget"
 )
 
 # 5. 사이드바 구성
@@ -670,6 +737,9 @@ if mode == "일반 챗봇":
             current_chat["title"] = prompt[:12] + "..." if len(prompt) > 12 else prompt
             
         with st.chat_message("assistant"):
+            if not check_openrouter_model_availability(selected_model):
+                st.error("현재 선택한 AI 모델을 OpenRouter에서 사용할 수 없습니다. 관리자에게 모델 설정을 확인해 주세요.")
+                st.stop()
             client = get_openrouter_client()
             if not client:
                 res = "API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)"
@@ -768,6 +838,9 @@ elif mode == "생기부 작성":
         if student_id:
             info_str = f"학번: {student_id}"
             
+            if not check_openrouter_model_availability(selected_model):
+                st.error("현재 선택한 AI 모델을 OpenRouter에서 사용할 수 없습니다. 관리자에게 모델 설정을 확인해 주세요.")
+                st.stop()
             client = get_openrouter_client()
             if not client:
                 st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
@@ -906,6 +979,9 @@ elif mode == "생기부 검수/진단":
         
     if st.button("생기부 정밀 진단 시작", type="primary"):
         if target_eval_text or any(item["type"] == "image" for item in st.session_state.attachments["eval"]) or any(item["type"] == "document" for item in st.session_state.attachments["eval"]):
+            if not check_openrouter_model_availability(selected_model):
+                st.error("현재 선택한 AI 모델을 OpenRouter에서 사용할 수 없습니다. 관리자에게 모델 설정을 확인해 주세요.")
+                st.stop()
             client = get_openrouter_client()
             if not client:
                 st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
