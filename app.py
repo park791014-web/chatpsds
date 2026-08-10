@@ -16,7 +16,7 @@ st.set_page_config(page_title="Chat PSDongSung", layout="wide", initial_sidebar_
 hide_streamlit_chrome()
 
 # ==========================================
-# 컴팩트 레이아웃 & 고밀도 Sticky Header CSS
+# 컴팩트 레이아웃 & 고밀도 Sticky Header & 통합 CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -26,13 +26,14 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* 메인 컨테이너 세로 패딩 조절 (하단 8.5rem 여백 확보) */
-    .block-container {
-        padding-top: 2.2rem !important;
+    /* 메인 앱 컨테이너 상단 여백 최소화 (뷰어 툴바 이하 밀착) */
+    .block-container,
+    [data-testid="stAppViewContainer"] .block-container {
+        padding-top: 2.5rem !important;
         padding-bottom: 8.5rem !important;
     }
     
-    /* Streamlit 수직 요소 간격 고밀도화 */
+    /* Streamlit 수직 요소 간격 */
     div[data-testid="stVerticalBlock"] {
         gap: 0.5rem !important;
     }
@@ -47,10 +48,10 @@ st.markdown("""
     [data-testid="stElementContainer"]:has(div[key="sticky_header"]),
     div[data-testid="stVerticalBlockBorderWrapper"]:has(div[key="sticky_header"]) {
         position: sticky !important;
-        top: 2.8rem !important;
+        top: 2.875rem !important;
         z-index: 9999 !important;
         background-color: #0f172a !important;
-        padding-top: 0.5rem !important;
+        padding-top: 0.4rem !important;
         padding-bottom: 0.4rem !important;
         margin-bottom: 0.4rem !important;
         border-bottom: 1px solid #334155 !important;
@@ -63,14 +64,15 @@ st.markdown("""
     div[key="sticky_header"] div[data-baseweb="select"] > div {
         overflow: visible !important;
         border-radius: 8px !important;
+        margin-top: 2px !important;
     }
     
-    /* 일반 챗봇 전용 하단 고정 첨부자료 패널 (st.chat_input 바로 위) */
-    div[data-testid="stVerticalBlock"] > div:has(div[key="chat_bottom_attachment_strip"]),
-    div[key="chat_bottom_attachment_strip"],
-    [data-testid="stElementContainer"]:has(div[key="chat_bottom_attachment_strip"]) {
+    /* 일반 챗봇 전용 대기 첨부자료 칩스 패널 (st.chat_input 바로 위) */
+    div[data-testid="stVerticalBlock"] > div:has(div[key="chat_pending_chips"]),
+    div[key="chat_pending_chips"],
+    [data-testid="stElementContainer"]:has(div[key="chat_pending_chips"]) {
         position: sticky !important;
-        bottom: 3.5rem !important;
+        bottom: 4.2rem !important;
         z-index: 998 !important;
         background-color: #0f172a !important;
         padding: 0.3rem 0.6rem !important;
@@ -80,7 +82,7 @@ st.markdown("""
         overflow: visible !important;
     }
     
-    /* 메인 화면 브랜드 헤더 여백 축소 */
+    /* 메인 화면 브랜드 헤더 여백 */
     .brand-header {
         margin-bottom: 0.2rem;
         padding-top: 0.1rem;
@@ -810,12 +812,77 @@ if mode == "일반 챗봇":
             if "tokens" in msg:
                 st.caption(f"소모 토큰: {msg['tokens']:,} Tokens")
 
-    # 2. 채팅 입력창 바로 위에 일반 챗봇 전용 하단 고정 첨부자료 패널 배치
-    with st.container(key="chat_bottom_attachment_strip"):
-        render_attachments_panel(uploader_key=f"uploader_chat_{st.session_state.uploader_key_chat}", scope="chat")
+    # 2. Ctrl+V 캡처 이미지 또는 대기 첨부자료 칩스 표시 (st.chat_input 바로 위)
+    paste_key = "paste_listener_chat"
+    def handle_pasted_image():
+        state = st.session_state.get(paste_key)
+        if state and hasattr(state, "pasted_image") and state.pasted_image:
+            img_data = state.pasted_image
+            add_attachment(
+                name=img_data["name"],
+                mime_type=img_data["type"],
+                data_base64=img_data["data"],
+                size_bytes=img_data["size"],
+                source="paste",
+                file_type="image",
+                scope="chat"
+            )
+    paste_listener(key=paste_key, on_pasted_image=handle_pasted_image)
 
-    # 3. 입력창 제출 대기
-    if prompt := st.chat_input("Chat PSDongSung에게 물어보기"):
+    current_attachments = st.session_state.attachments["chat"]
+    if current_attachments:
+        with st.container(key="chat_pending_chips"):
+            st.caption("대기 중인 첨부자료 (Ctrl+V / 파일 첨부):")
+            max_cols = min(len(current_attachments), 6)
+            cols = st.columns(max_cols)
+            for idx, item in enumerate(current_attachments):
+                with cols[idx % max_cols]:
+                    if item["type"] == "image":
+                        st.image(item["data"], width=45)
+                        btn_label = f"✕ {item['name'][:8]}"
+                    else:
+                        btn_label = f"✕ [문서]{item['name'][:8]}"
+                    if st.button(btn_label, key=f"del_chat_att_{idx}", help=f"{item['name']} ({item['size_kb']:.0f}KB) 삭제"):
+                        current_attachments.pop(idx)
+                        st.rerun()
+
+    # 3. Streamlit 1.61.1 통합 채팅 입력창 (accept_file="multiple" 네이티브 파일 첨부 지원)
+    user_input = st.chat_input(
+        "Chat PSDongSung에게 물어보기 (파일 첨부 및 Ctrl+V 캡처 지원)",
+        accept_file="multiple",
+        file_type=["png", "jpg", "jpeg", "webp", "pdf", "hwp", "xlsx", "docx", "pptx"],
+        key="chat_input_widget"
+    )
+
+    if user_input:
+        prompt = ""
+        # ChatInputValue 반환값 처리 (user_input.text 또는 dict 또는 str)
+        if hasattr(user_input, "text"):
+            prompt = user_input.text or ""
+        elif isinstance(user_input, dict):
+            prompt = user_input.get("text", "")
+        elif isinstance(user_input, str):
+            prompt = user_input
+
+        # 파일 첨부 처리 (user_input.files 또는 dict)
+        submitted_files = []
+        if hasattr(user_input, "files") and user_input.files:
+            submitted_files = user_input.files
+        elif isinstance(user_input, dict) and user_input.get("files"):
+            submitted_files = user_input.get("files")
+
+        if submitted_files:
+            for f in submitted_files:
+                file_bytes = f.getvalue()
+                file_hash = calculate_bytes_hash(file_bytes)
+                if f.name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                    import base64
+                    b64_data = f"data:{f.type};base64," + base64.b64encode(file_bytes).decode("utf-8")
+                    add_attachment(f.name, f.type, b64_data, f.size, "upload", "image", scope="chat")
+                else:
+                    text_content = parse_uploaded_file(f)
+                    add_document_attachment(f.name, f.type, text_content, f.size, file_hash, scope="chat")
+
         # 공통 API 페이로드 컴파일 (chat 스코프 지정)
         user_content = compile_api_payload(prompt, selected_model_name, scope="chat")
         
@@ -830,7 +897,7 @@ if mode == "일반 챗봇":
                     st.image(part["image_url"]["url"], width=250)
                     
         if current_chat["title"] == "새 대화":
-            current_chat["title"] = prompt[:12] + "..." if len(prompt) > 12 else prompt
+            current_chat["title"] = prompt[:12] + "..." if len(prompt) > 12 else (prompt if prompt else "첨부자료 분석")
             
         with st.chat_message("assistant"):
             if not check_openrouter_model_availability(selected_model):
