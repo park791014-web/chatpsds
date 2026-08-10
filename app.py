@@ -16,7 +16,7 @@ st.set_page_config(page_title="Chat PSDongSung", layout="wide", initial_sidebar_
 hide_streamlit_chrome()
 
 # ==========================================
-# 컴팩트 레이아웃 & 고밀도 Sticky Header & 통합 CSS
+# 컴팩트 레이아웃 & 정적 헤더 통합 CSS
 # ==========================================
 st.markdown("""
     <style>
@@ -26,10 +26,10 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* 메인 앱 컨테이너 상단 여백 최소화 (뷰어 툴바 이하 밀착) */
+    /* 메인 앱 컨테이너 상단 여백 컴팩트 설정 (1.5rem) */
     .block-container,
     [data-testid="stAppViewContainer"] .block-container {
-        padding-top: 2.5rem !important;
+        padding-top: 1.5rem !important;
         padding-bottom: 8.5rem !important;
     }
     
@@ -40,31 +40,6 @@ st.markdown("""
     
     div[data-testid="stExpander"] {
         margin-bottom: 0.4rem !important;
-    }
-    
-    /* 상단 Sticky 고정 헤더 컨테이너 컴팩트화 & 잘림 방지 (overflow: visible) */
-    div[data-testid="stVerticalBlock"] > div:has(div[key="sticky_header"]),
-    div[key="sticky_header"],
-    [data-testid="stElementContainer"]:has(div[key="sticky_header"]),
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(div[key="sticky_header"]) {
-        position: sticky !important;
-        top: 2.875rem !important;
-        z-index: 9999 !important;
-        background-color: #0f172a !important;
-        padding-top: 0.4rem !important;
-        padding-bottom: 0.4rem !important;
-        margin-bottom: 0.4rem !important;
-        border-bottom: 1px solid #334155 !important;
-        overflow: visible !important;
-    }
-    
-    /* 모델 selectbox 사방 둥근 테두리 잘림 방지 및 여백 확보 */
-    div[key="sticky_header"] div[data-testid="stSelectbox"],
-    div[key="sticky_header"] div[data-baseweb="select"],
-    div[key="sticky_header"] div[data-baseweb="select"] > div {
-        overflow: visible !important;
-        border-radius: 8px !important;
-        margin-top: 2px !important;
     }
     
     /* 일반 챗봇 전용 대기 첨부자료 칩스 패널 (st.chat_input 바로 위) */
@@ -79,14 +54,14 @@ st.markdown("""
         margin-bottom: 0.2rem !important;
         border-radius: 8px 8px 0 0 !important;
         border-top: 1px solid #334155 !important;
-        overflow: visible !important;
     }
     
-    /* 메인 화면 브랜드 헤더 여백 */
+    /* 메인 화면 브랜드 헤더 여백 및 하단 구분선 */
     .brand-header {
         margin-bottom: 0.2rem;
         padding-top: 0.1rem;
-        padding-bottom: 0.2rem;
+        padding-bottom: 0.4rem;
+        border-bottom: 1px solid #334155;
     }
     
     /* 테마 고정에 따라 항상 밝고 선명한 텍스트 가시성 유지 */
@@ -591,8 +566,8 @@ if st.session_state.current_chat_idx is None and not st.session_state.chat_sessi
     st.session_state.chat_sessions.append({"title": "새 대화", "messages": []})
     st.session_state.current_chat_idx = 0
 
-# 4. 상단 고정 헤더 (제목 / 모델 선택 / 모드 탭)
-with st.container(key="sticky_header"):
+# 4. 상단 정적 헤더 (제목 / 모델 선택 / 모드 탭)
+with st.container(key="top_header_section"):
     mode_from_state = st.session_state.get("mode_control_widget", "일반 챗봇")
     model_keys = list(MODEL_MAP.keys())
 
