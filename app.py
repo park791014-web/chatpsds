@@ -26,10 +26,10 @@ st.markdown("""
         font-family: 'Inter', 'Noto Sans KR', sans-serif;
     }
 
-    /* 메인 앱 컨테이너 상단 여백 컴팩트 설정 (1.5rem) */
+    /* 메인 앱 컨테이너 상단 여백 설정 (Streamlit 기본 헤더 이하 여유 확보) */
     .block-container,
     [data-testid="stAppViewContainer"] .block-container {
-        padding-top: 1.5rem !important;
+        padding-top: 3.5rem !important;
         padding-bottom: 8.5rem !important;
     }
     
