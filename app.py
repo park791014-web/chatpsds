@@ -611,17 +611,7 @@ with col2:
     selected_model = selected_model_info["id"]
     role_text = selected_model_info["role"]
     
-    # 실시간 가격 데이터 동적 가져오기 (1시간 캐싱)
-    live_pricing = fetch_openrouter_pricing()
-    price_str = live_pricing.get(selected_model, None)
-    
-    if price_str:
-        caption_text = f"{selected_model_name} — {role_text} | {price_str}"
-    else:
-        caption_text = f"{selected_model_name} — {role_text} | 가격 정보 확인 불가"
-        
-    st.caption(caption_text)
-    st.caption("입력 / 출력, 100만 토큰 기준 · OpenRouter 현재 가격")
+    st.caption(role_text)
 
 # 모드 선택
 mode = st.segmented_control(
