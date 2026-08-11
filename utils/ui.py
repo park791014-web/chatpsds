@@ -51,10 +51,16 @@ def get_paste_listener():
           const { setTriggerValue } = component;
           
           const handlePaste = (e) => {
-            const items = (e.clipboardData || e.originalEvent.clipboardData).items;
-            for (const item of items) {
+            const clipboardData = e.clipboardData || (window.clipboardData);
+            if (!clipboardData || !clipboardData.items) return;
+
+            const items = clipboardData.items;
+            for (let i = 0; i < items.length; i++) {
+              const item = items[i];
               if (item.kind === 'file' && item.type.startsWith('image/')) {
                 const file = item.getAsFile();
+                if (!file) continue;
+
                 const reader = new FileReader();
                 reader.onload = function (event) {
                   const img = new Image();
@@ -79,7 +85,6 @@ def get_paste_listener():
                     const ctx = canvas.getContext("2d");
                     ctx.drawImage(img, 0, 0, width, height);
                     
-                    // 텍스트 깨짐을 방지하는 무손실 PNG 포맷 우선 적용 (미인식 시 원본 타입 사용)
                     const outputType = file.type || "image/png";
                     const compressedBase64 = canvas.toDataURL(outputType);
                     
@@ -93,15 +98,16 @@ def get_paste_listener():
                   img.src = event.target.result;
                 };
                 reader.readAsDataURL(file);
-                e.preventDefault();
                 break;
               }
             }
           };
           
+          window.addEventListener("paste", handlePaste);
           document.addEventListener("paste", handlePaste);
           
           return () => {
+            window.removeEventListener("paste", handlePaste);
             document.removeEventListener("paste", handlePaste);
           };
         }
