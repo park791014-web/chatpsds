@@ -826,7 +826,7 @@ def build_validation_issue_details(text, current_bytes, target_bytes, forbidden_
 # Secrets 파일 백그라운드 파싱
 # ==========================================
 def load_toml_secrets():
-    secrets_data = {"ACCESS_CODE": "", "OPENROUTER_API_KEY": ""}
+    secrets_data = {"ACCESS_CODE": "", "DEMO_ACCESS_CODE": "", "OPENROUTER_API_KEY": ""}
     
     possible_paths = [
         os.path.join(os.getcwd(), ".streamlit", "secrets.toml"),
@@ -842,6 +842,10 @@ def load_toml_secrets():
                     code_match = re.search(r'ACCESS_CODE\s*=\s*["\']([^"\']+)["\']', content)
                     if code_match:
                         secrets_data["ACCESS_CODE"] = code_match.group(1).strip()
+
+                    demo_code_match = re.search(r'DEMO_ACCESS_CODE\s*=\s*["\']([^"\']+)["\']', content)
+                    if demo_code_match:
+                        secrets_data["DEMO_ACCESS_CODE"] = demo_code_match.group(1).strip()
                         
                     key_match = re.search(r'OPENROUTER_API_KEY\s*=\s*["\']([^"\']+)["\']', content)
                     if key_match:
@@ -855,6 +859,8 @@ def load_toml_secrets():
             secrets_data["OPENROUTER_API_KEY"] = str(st.secrets.get("OPENROUTER_API_KEY", "")).strip()
         if not secrets_data["ACCESS_CODE"]:
             secrets_data["ACCESS_CODE"] = str(st.secrets.get("ACCESS_CODE", "")).strip()
+        if not secrets_data["DEMO_ACCESS_CODE"]:
+            secrets_data["DEMO_ACCESS_CODE"] = str(st.secrets.get("DEMO_ACCESS_CODE", "")).strip()
     except Exception:
         pass
         
@@ -862,7 +868,18 @@ def load_toml_secrets():
 
 SECRETS = load_toml_secrets()
 
+def is_demo_mode():
+    return st.session_state.get("access_mode") == "demo"
+
+def get_api_unavailable_message():
+    if is_demo_mode():
+        return "체험 모드에서는 AI/API 실행 기능이 비활성화되어 있습니다. 화면 구성과 입력 기능만 확인할 수 있습니다."
+    return "API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)"
+
 def get_openrouter_client():
+    # 공유용 체험 코드는 OpenRouter API를 절대 호출하지 않습니다.
+    if is_demo_mode():
+        return None
     api_key = SECRETS["OPENROUTER_API_KEY"]
     if not api_key:
         return None
@@ -911,6 +928,9 @@ MODEL_MAP = {
 
 # OpenRouter 모델 활성/사용가능 상태 검증 함수
 def check_openrouter_model_availability(model_id):
+    # 체험 모드는 네트워크/API 확인 자체를 생략합니다.
+    if is_demo_mode():
+        return True
     if "openrouter_models_cache" not in st.session_state:
         st.session_state.openrouter_models_cache = None
         
@@ -938,6 +958,8 @@ def check_openrouter_model_availability(model_id):
 # 2. 세션 상태 초기화
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+if "access_mode" not in st.session_state:
+    st.session_state.access_mode = None
 
 if "user_has_manually_chosen_model" not in st.session_state:
     st.session_state.user_has_manually_chosen_model = False
@@ -1769,14 +1791,23 @@ if not st.session_state.authenticated:
         access_code = st.text_input("접속 코드 입력", type="password", placeholder="보안 코드를 입력하세요", label_visibility="collapsed")
         if st.button("SYSTEM ACCESS", type="primary", use_container_width=True):
             target_code = SECRETS["ACCESS_CODE"]
-            if not target_code:
-                st.error("ACCESS_CODE가 설정되지 않았습니다. .streamlit/secrets.toml을 확인해 주세요.")
-            elif access_code == target_code:
+            demo_code = SECRETS["DEMO_ACCESS_CODE"]
+            if not target_code and not demo_code:
+                st.error("ACCESS_CODE 또는 DEMO_ACCESS_CODE가 설정되지 않았습니다. .streamlit/secrets.toml을 확인해 주세요.")
+            elif target_code and access_code == target_code:
                 st.session_state.authenticated = True
+                st.session_state.access_mode = "full"
+                st.rerun()
+            elif demo_code and access_code == demo_code:
+                st.session_state.authenticated = True
+                st.session_state.access_mode = "demo"
                 st.rerun()
             else:
                 st.error("접속 코드가 올바르지 않습니다.")
     st.stop()
+
+if is_demo_mode():
+    st.info("🧪 공유용 체험 모드 · AI/API 호출은 차단되어 있으며 화면 구성과 입력 기능만 확인할 수 있습니다.")
 
 # 최초 접속 시 기본 세션 생성
 if st.session_state.current_chat_idx is None and not st.session_state.chat_sessions:
@@ -2049,6 +2080,7 @@ with st.sidebar:
     
     if st.button("로그아웃", use_container_width=True):
         st.session_state.authenticated = False
+        st.session_state.access_mode = None
         st.rerun()
 
 # 6. 메인 동작 영역
@@ -2097,7 +2129,7 @@ if mode == "일반 챗봇":
                 else:
                     client = get_openrouter_client()
                     if not client:
-                        answer_placeholder.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
+                        answer_placeholder.error(get_api_unavailable_message())
                     else:
                         try:
                             current_user_message = current_chat["messages"][-1]
@@ -2488,7 +2520,7 @@ elif mode == "생기부 작성":
             client = get_openrouter_client()
             if not client:
                 st.session_state.is_analyzing_student_sources = False
-                st.error("API 키 설정이 완료되지 않았습니다.")
+                st.error(get_api_unavailable_message())
             else:
                 with st.spinner(f"[{selected_model_name}] 첨부자료를 최초 1회 분석 중... 이후에는 이 요약을 재사용합니다."):
                     try:
@@ -2575,7 +2607,7 @@ elif mode == "생기부 작성":
             client = get_openrouter_client()
             if not client:
                 st.session_state.is_generating_batch_students = False
-                st.error("API 키 설정이 완료되지 않았습니다.")
+                st.error(get_api_unavailable_message())
             elif pending_students:
                 progress = st.progress(0.0, text=f"학생 초안 준비 중 · 0/{len(pending_students)}")
                 status_box = st.empty()
@@ -2701,7 +2733,7 @@ elif mode == "생기부 작성":
             else:
                 client = get_openrouter_client()
                 if not client:
-                    st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
+                    st.error(get_api_unavailable_message())
                     st.session_state.is_generating_draft = False
                 else:
                     with st.spinner(f"[{selected_model_name}] {resolved_student_id} {resolved_student_name} 초안 생성 중..."):
@@ -2921,7 +2953,7 @@ elif mode == "생기부 작성":
                         client = get_openrouter_client()
                         if not client:
                             st.session_state.is_refining_draft = False
-                            st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
+                            st.error(get_api_unavailable_message())
                         else:
                             with st.spinner(f"[{selected_model_name}] 추가 요청을 반영해 초안을 수정 중..."):
                                 try:
@@ -3054,7 +3086,7 @@ elif mode == "생기부 검수/진단":
             else:
                 client = get_openrouter_client()
                 if not client:
-                    st.error("API 키 설정이 완료되지 않았습니다. (.streamlit/secrets.toml 확인 필요)")
+                    st.error(get_api_unavailable_message())
                     st.session_state.is_running_eval = False
                 else:
                     with st.spinner(f"[{selected_model_name}] 생기부 정밀 분석 및 오류 검수 진행 중..."):
